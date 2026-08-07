@@ -13,10 +13,13 @@
 import ipaddress
 import json
 import re
+import socket
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
 PING_TIMEOUT_MS = 300
+TCP_PROBE_TIMEOUT_S = 0.3
+DEFAULT_PROBE_PORT = 22  # 대상 포트를 모를 때(예: 호출부가 안 넘겨줄 때)의 기본값
 SCAN_MAX_WORKERS = 40
 SCAN_MAX_HOSTS = 1024  # ⚠ 실제 대역이 너무 넓으면(/22보다 넓으면) 스캔이 너무 느려지므로 상한선
 SCAN_RETRY_COUNT = 2  # 한 번 실패해도 순간적인 타이밍/혼잡 문제일 수 있어 재시도
@@ -61,6 +64,26 @@ def _ping_once(ip):
         )
     except (subprocess.SubprocessError, OSError):
         pass
+
+
+def _tcp_probe_once(ip, port):
+    """
+    ⚠ 3번 개선사항 — ping(ICMP)을 방화벽으로 막아둔 장비는 실제로 켜져 있고 SSH 포트는
+    열려 있어도 ping만으로는 스캔에서 놓친다(실사용 확인). 대상 포트로 TCP 연결을 시도하면,
+    연결이 성공하든 거부(RST)당하든 상관없이 그 과정에서 운영체제가 ARP로 상대 MAC을 먼저
+    알아내 캐시에 남기기 때문에 결과적으로 스캔에 잡힌다. 그래서 포트 자체가 열려있는지는
+    신경 쓰지 않고 그냥 시도만 해본다(실패해도 무시).
+    """
+    try:
+        with socket.create_connection((ip, port), timeout=TCP_PROBE_TIMEOUT_S):
+            pass
+    except OSError:
+        pass
+
+
+def _probe_host(ip, port):
+    _ping_once(ip)
+    _tcp_probe_once(ip, port)
 
 
 def _get_local_prefix_length(hint_ip):
@@ -127,13 +150,13 @@ def _get_local_networks():
     return networks
 
 
-def _scan_once(target_mac, network):
+def _scan_once(target_mac, network, port=DEFAULT_PROBE_PORT):
     hosts = [str(ip) for ip in network.hosts()]
     if len(hosts) > SCAN_MAX_HOSTS:
         hosts = hosts[:SCAN_MAX_HOSTS]
 
     with ThreadPoolExecutor(max_workers=SCAN_MAX_WORKERS) as pool:
-        list(pool.map(_ping_once, hosts))
+        list(pool.map(lambda ip: _probe_host(ip, port), hosts))
 
     try:
         result = subprocess.run(
@@ -150,10 +173,13 @@ def _scan_once(target_mac, network):
     return None
 
 
-def find_ip_for_mac(mac, subnet_hint_ip):
+def find_ip_for_mac(mac, subnet_hint_ip, port=DEFAULT_PROBE_PORT):
     """
     subnet_hint_ip(예전에 쓰던 IP)와 같은 네트워크 대역 전체를 훑어서, mac과
     일치하는 장비의 현재 IP를 찾아 돌려준다. 못 찾으면 None.
+
+    port: 대상 장비의 SSH 포트(프로파일의 port). ping이 막혀 있어도 이 포트로 TCP
+    연결을 시도해서 ARP 캐시를 채우기 위해 쓴다 (3번 개선사항 — 아래 _probe_host 참고).
 
     ⚠ ARP 테이블은 "최근에 통신한 상대"만 담고 있어서, 먼저 대역 전체에 핑을 돌려
     캐시를 채워야 한다. 병렬로 처리해서 몇 초 안에 끝나게 한다.
@@ -185,7 +211,7 @@ def find_ip_for_mac(mac, subnet_hint_ip):
         except ValueError:
             continue
         for _ in range(SCAN_RETRY_COUNT):
-            found = _scan_once(target_mac, network)
+            found = _scan_once(target_mac, network, port)
             if found:
                 return found
 

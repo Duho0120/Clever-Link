@@ -28,6 +28,7 @@ import mdns_ambiguity_state
 import mac_mismatch_state
 import sheet_diverged_state
 import mac_resolved_state
+import ssh_session
 
 RC_ADDR = "127.0.0.1:5572"  # ⚠ "localhost"는 IPv6([::1])로 해석되어 지연/실패를 일으킨 전례가 있어 명시적 IP 사용
 RC_USER = "launcher"
@@ -221,6 +222,26 @@ def _build_remote_string(profile, resolved_host, resolved_port, remote_path="/")
     return base if remote_path in ("/", "") else base + remote_path
 
 
+def _capture_mac(profile, resolved_host, resolved_port):
+    """
+    ⚠ 1번 개선사항: 기존엔 ARP 조회(mac_discovery.get_mac_for_ip)만 가능해서 터널/라우팅을
+    거친 원격지는 마운트 경로에서 MAC 검증 사각지대였다 (ARP는 같은 로컬 네트워크(L2)
+    안에서만 동작). ssh_session.get_remote_mac()과 같은 방식(원격 장비에 직접 SSH로
+    물어보기)을 쓰기 위해, MAC 확인 전용의 짧은 SSH 연결을 하나 열었다가 바로 닫는다.
+    (마운트가 이미 성공한 뒤 호출되므로 SSH 서버 자체는 열려 있음이 보장된 상태.)
+    실패하면(방화벽, 명령 제한 등) 기존 ARP 방식으로 대체한다.
+    """
+    try:
+        ssh_client = ssh_session.open_connection(profile, resolved_host, resolved_port)
+    except Exception:
+        return mac_discovery.get_mac_for_ip(resolved_host)
+    try:
+        mac = ssh_session.get_remote_mac(ssh_client)
+    finally:
+        ssh_client.close()
+    return mac or mac_discovery.get_mac_for_ip(resolved_host)
+
+
 def mount_profile(profile_name, drive_letter, remote_path="/", _mac_retry=False):
     """
     프로파일 이름으로 SFTP를 드라이브 문자에 마운트한다.
@@ -246,7 +267,7 @@ def mount_profile(profile_name, drive_letter, remote_path="/", _mac_retry=False)
         print(f"[동적 IP 재탐색] '{profile_name}' ({resolved_host}:{resolved_port}) 응답 없음 - 새 IP 탐색 중...")
         new_ip = None
         if profile.get("mac"):
-            new_ip = mac_discovery.find_ip_for_mac(profile["mac"], profile["host"])
+            new_ip = mac_discovery.find_ip_for_mac(profile["mac"], profile["host"], resolved_port)
         if (not new_ip or new_ip == resolved_host) and profile.get("hostname"):
             # ⚠ MAC 스캔이 실패하면(ICMP 차단 등) 2차 보험으로 mDNS(호스트 이름)로도
             # 시도해본다. 마운트 경로는 SSH 셸이 없어서 호스트 이름을 직접 캡처는
@@ -327,11 +348,11 @@ def mount_profile(profile_name, drive_letter, remote_path="/", _mac_retry=False)
     # ⚠ 13번 엣지케이스 2차 안전장치 — ssh_session.py의 connect_profile()과 동일한 목적.
     # 마운트 경로는 별개(paramiko가 아니라 rclone rc API)라 여기서도 똑같이 해줘야
     # "터미널로는 안전한데 마운트로는 안 걸림" 같은 빈틈이 안 생긴다.
-    # ⚠ 다만 여기는 SSH 셸이 없어서 ssh_session.py처럼 "장비한테 직접 물어보는" 방식은
-    # 못 쓰고 ARP 조회만 가능하다 — 즉 라우팅/터널(loclx.io 등)을 거친 원격지는 이 경로
-    # (마운트만 하고 터미널은 한 번도 안 연 경우)에서는 여전히 사각지대로 남는다.
-    # 최소 한 번 터미널로 접속하면 그때 ssh_session.py 쪽에서 확실하게 캡처됨.
-    captured_mac = mac_discovery.get_mac_for_ip(resolved_host)
+    # ⚠ 1번 개선사항(2026-08-07): 예전엔 SSH 셸이 없어서 ARP 조회만 가능했고, 그 결과
+    # 라우팅/터널(loclx.io 등)을 거친 원격지는 마운트 경로에서 MAC 검증 사각지대였다.
+    # 지금은 _capture_mac()이 MAC 확인 전용의 짧은 SSH 연결을 열어 get_remote_mac()
+    # 방식(장비한테 직접 물어보기)을 먼저 시도하고, 그게 실패할 때만 ARP로 대체한다.
+    captured_mac = _capture_mac(profile, resolved_host, resolved_port)
     stored_mac = profile.get("mac")
     if captured_mac:
         if not stored_mac:
@@ -355,7 +376,7 @@ def mount_profile(profile_name, drive_letter, remote_path="/", _mac_retry=False)
             if not _mac_retry:
                 recovery_attempted = True
                 print(f"[MAC 불일치 자동 복구 시도] 저장된 MAC({stored_mac})을 가진 진짜 장비를 찾는 중...")
-                correct_ip = mac_discovery.find_ip_for_mac(stored_mac, resolved_host)
+                correct_ip = mac_discovery.find_ip_for_mac(stored_mac, resolved_host, resolved_port)
                 if correct_ip and correct_ip != resolved_host:
                     print(f"[MAC 불일치 자동 복구] 올바른 장비를 {correct_ip}에서 찾음 - 재마운트 시도")
                     unmount(drive_letter)

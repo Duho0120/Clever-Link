@@ -30,6 +30,7 @@ import mac_resolved_state
 import sheet_diverged_state
 import sheet_sync
 import tray_icon
+import background_watcher
 from resource_path import resource_path, app_dir
 
 # ⚠ 배포 후 WebView2 캐시 문제 방지용 — 새 버전을 배포할 때마다 이 숫자를 1씩 올려야 한다.
@@ -480,6 +481,11 @@ if __name__ == "__main__":
     # 화면에 안 보이는 채로 영원히 멈추는 문제가 있었음.
     ssh_session.set_confirm_callback(ask_confirm)
 
+    # ⚠ 2번 개선사항: 사용자가 접속을 시도하기 전에도 IP 변경/MAC 불일치를 백그라운드에서
+    # 주기적으로 미리 감지/교정한다 (SSH 연결 없이 TCP 도달성 + ARP만 사용 — 자격증명/
+    # 호스트키 팝업 없음).
+    background_watcher.start()
+
     # ⚠ WebView2 Runtime 확인은 반드시 webview.create_window()보다 먼저 실행해야 한다.
     # 없으면 pywebview 창 자체를 못 띄우므로(빈 화면/크래시), 확인창은 위에서 이미
     # 준비된 tkinter 기반 ask_confirm으로 띄운다.
@@ -541,6 +547,7 @@ if __name__ == "__main__":
                 return  # 취소 -> 트레이 아이콘도 그대로, 종료 안 함
 
         print("[종료 처리] 남은 마운트/서버 정리 중...")
+        background_watcher.stop()
         mount_control.cleanup_all()
         mount_control.stop_rcd()  # ⚠ 안 하면 rclone.exe가 백그라운드에 남아 exe/폴더를 계속 잠금
 

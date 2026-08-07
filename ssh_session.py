@@ -164,6 +164,28 @@ def _connect(connect_kwargs):
     return client
 
 
+def open_connection(profile, resolved_host, resolved_port):
+    """
+    ⚠ 1번 개선사항(마운트 경로 MAC 검증 공백 해소)용 저수준 연결 함수.
+    connect_profile()과 달리 동적 IP 재탐색/MAC 검증 로직 없이 지정된 주소로만 순수하게
+    SSH 연결을 맺는다. mount_control.py는 SSH 셸이 없어 기존엔 ARP 조회(mac_discovery.
+    get_mac_for_ip)만 가능했는데, 이는 터널/라우팅을 거친 원격지에서는 항상 실패하는
+    사각지대였다. get_remote_mac()과 같은 방식(원격 장비에 직접 물어보기)을 마운트
+    경로에서도 쓸 수 있도록, MAC 확인 전용의 짧은 연결을 열 때 이 함수를 재사용한다.
+    실패하면 예외를 그대로 던진다 (호출부에서 ARP 방식으로 대체하도록).
+    """
+    connect_kwargs = {
+        "hostname": resolved_host,
+        "port": resolved_port,
+        "username": profile["username"],
+    }
+    if profile["auth_type"] == "password":
+        connect_kwargs["password"] = profile["password"]
+    else:  # key_file
+        connect_kwargs["key_filename"] = profile["key_filename"]
+    return _connect(connect_kwargs)
+
+
 def connect_profile(profile_name, _mac_retry=False):
     """
     프로파일 이름으로 SSH 연결을 맺고, paramiko.SSHClient를 반환한다.
@@ -205,7 +227,7 @@ def connect_profile(profile_name, _mac_retry=False):
         print(f"[동적 IP 재탐색] '{profile_name}' 접속 실패 - 새 IP 탐색 중...")
         new_ip = None
         if profile.get("mac"):
-            new_ip = mac_discovery.find_ip_for_mac(profile["mac"], profile["host"])
+            new_ip = mac_discovery.find_ip_for_mac(profile["mac"], profile["host"], resolved_port)
         if (not new_ip or new_ip == resolved_host) and profile.get("hostname"):
             # ⚠ MAC 스캔이 실패하면(ICMP 차단 등) 2차 보험으로 mDNS(호스트 이름)로
             # 한 번 더 시도한다. 호스트 이름을 아직 모르면(SSH 터미널을 한 번도 연
@@ -291,7 +313,7 @@ def connect_profile(profile_name, _mac_retry=False):
             if not _mac_retry:
                 recovery_attempted = True
                 print(f"[MAC 불일치 자동 복구 시도] 저장된 MAC({stored_mac})을 가진 진짜 장비를 찾는 중...")
-                correct_ip = mac_discovery.find_ip_for_mac(stored_mac, resolved_host)
+                correct_ip = mac_discovery.find_ip_for_mac(stored_mac, resolved_host, resolved_port)
                 if correct_ip and correct_ip != resolved_host:
                     print(f"[MAC 불일치 자동 복구] 올바른 장비를 {correct_ip}에서 찾음 - 재접속 시도")
                     client.close()
