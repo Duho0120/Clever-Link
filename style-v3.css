@@ -1,0 +1,330 @@
+/* V3 — RaiDrive(V2) 베이스 + 사내 ERP 화면의 컬러 액션 버튼 느낌을 다크모드로 이식
+   기준: 포인트 컬러(파랑)는 유지하고, 액션별로 컬러를 구분한 알약형 버튼을 추가.
+   V2는 그대로 두고 이 파일만 새로 만든 것 — index.html의 href만 바꾸면 언제든 V2로 복귀 가능. */
+:root {
+  --bg: #eef1f5;
+  --panel: #ffffff;
+  --panel-hover: #f6f8fb;
+  --header-top: #1a76ad;
+  --header-bottom: #125a86;
+  --accent: #2f8fd6;
+  --accent-hover: #4aa3e0;
+  --terminal: #8b5cf6;
+  --terminal-dark: #6528d6;
+  --text: #1f2430;
+  --text-dim: #6b7280;
+  --border: #dde1e7;
+  --danger: #d9534f;
+  --success: #3ac569;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+body {
+  font-family: 'Segoe UI', 'Malgun Gothic', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;  /* body 자체는 스크롤 안 함 — #mainScroll만 스크롤 (스크롤바가 헤더에 안 걸치게) */
+}
+/* 헤더 아래 본문만 스크롤되는 영역. 헤더는 아래 .header-row에서 flex-shrink:0으로 고정 */
+#mainScroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+h2 { color: #fff; margin: 0; font-size: 18px; font-weight: 600; }
+
+input { padding: 6px; border-radius: 4px; border: 1px solid var(--border); background: #fff; color: var(--text); }
+button { padding: 6px 12px; border-radius: 4px; border: none; cursor: pointer; }
+
+/* ── 상단 타이틀바 (그라데이션 헤더 = 프레임리스 창의 OS 타이틀바 대체) ───────────────────── */
+.header-row {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;  /* body가 flex column이 됐으니 헤더 높이가 눌리지 않게 고정 */
+  background: linear-gradient(180deg, var(--header-top), var(--header-bottom));
+  box-shadow: 0 1px 0 rgba(0,0,0,0.3);
+  /* 커서만으로는 드래그 가능 영역이라는 게 안 드러나서 굳이 지정 안 함 (버튼 위에서는 자동으로 pointer) */
+}
+.header-row-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  /* ⚠ 로고(36px)/버튼 크기는 그대로 두고 위아래 여백만 줄여서 툴바 두께를 줄임 */
+  padding: 8px 12px 8px 24px;
+  user-select: none;  /* 드래그 중 텍스트가 선택되는 것 방지 */
+}
+
+/* ⚠ 네이티브 타이틀바 버튼 자리 — 창 끝까지 꽉 채워야 Fitts's law상 클릭하기 편함 */
+.window-controls {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+}
+.window-controls .win-btn {
+  width: 44px;
+  border: none;
+  background: transparent;
+  color: rgba(255,255,255,0.85);
+  border-radius: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.window-controls .win-btn svg { width: 11px; height: 11px; }
+.window-controls .win-minimize:hover,
+.window-controls .win-maximize:hover {
+  background: rgba(255,255,255,0.15);
+  color: #fff;
+}
+.window-controls .win-close:hover {
+  background: #e81123;
+  color: #fff;
+}
+.header-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-shrink: 1;
+}
+.header-logo {
+  display: inline-flex;
+  color: #fff;
+  flex-shrink: 0;
+}
+.header-logo img { width: 36px; height: 36px; display: block; }
+.header-title-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  min-width: 0;
+  overflow: hidden;
+}
+/* ⚠ 창이 좁아지면(작은 화면/특정 배율) 버튼이 줄바꿈되며 깨지는 대신,
+   상대적으로 덜 중요한 타이틀 쪽이 말줄임표로 먼저 양보하게 함 */
+.header-wordmark { display: none; }
+.header-title-text h2, .header-subtitle {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.header-subtitle {
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.65);
+}
+
+.header-actions {
+  flex-shrink: 0;
+}
+.header-actions select,
+.header-actions button {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.header-actions > *:not(:last-child) {
+  position: relative;
+  margin-right: 8px;
+  padding-right: 8px;
+}
+.header-actions > *:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 16px;
+  background: rgba(255,255,255,0.25);
+}
+.header-row select {
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.35);
+  color: #fff;
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+.header-row select option { color: #111; }
+
+/* 새로고침: 보조 액션 — 반투명 아웃라인 알약형 */
+.header-row button {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.3);
+  color: #fff;
+  font-weight: 600;
+  padding: 7px 14px;
+  border-radius: 999px;
+}
+.header-row button:hover { background: rgba(255,255,255,0.15); }
+
+/* + 추가: 주 액션 — 그라데이션 배너 위에서 대비되는 흰색 솔리드 알약형 */
+.header-row .btn-open-add {
+  background: #fff;
+  border: 1px solid #fff;
+  color: var(--header-bottom);
+}
+.header-row .btn-open-add:hover { background: #eaf4fc; }
+
+/* ── 본문 여백 (body padding 대신 각 블록에 개별 부여) ───────── */
+#profileList { padding: 16px 24px 0; }
+.sheet-issue-warning, .sheet-ghost-warning { margin: 8px 24px 0; font-size: 13px; }
+.sheet-issue-warning { color: #d64545; }
+.sheet-ghost-warning { color: #b9770e; }
+#status {
+  margin: 14px 24px 20px;
+  color: #a6740a;
+  min-height: 20px;
+  font-size: 13px;
+}
+
+/* ── 원격지 행 (컬러 카드) ─────────────── */
+.profile-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin-bottom: 10px;
+  box-shadow: 0 1px 3px rgba(20,30,50,0.06);
+  transition: background .15s, border-color .15s, box-shadow .15s;
+}
+.profile-row:hover {
+  background: var(--panel-hover);
+  border-color: #c7ccd4;
+  box-shadow: 0 4px 14px rgba(20,30,50,0.08);
+}
+
+/* 원격지 아이콘 칩: 디스크 모양 대신 병원(Ward) 아이콘 — 포인트 컬러 유지 */
+.row-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  background: linear-gradient(160deg, var(--accent), #1f5f92);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.row-icon svg { width: 22px; height: 22px; }
+
+.row-main { flex: 1; min-width: 0; }
+.row-title-line { display: flex; align-items: baseline; gap: 8px; }
+.profile-name {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.row-status-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.mount-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #5a5f66;
+  flex-shrink: 0;
+}
+.mount-dot.on { background: var(--success); box-shadow: 0 0 0 3px rgba(58,197,105,0.15); }
+.mount-dot.off { background: #5a5f66; }
+
+.volume-select {
+  background: #fff;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 7px 10px;
+  min-width: 170px;
+  flex-shrink: 0;
+}
+
+/* ── 액션 버튼: 원형 아이콘 → 라벨이 보이는 컬러 알약형 버튼 ─────────────── */
+.row-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.row-actions button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 38px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter .15s, transform .1s, box-shadow .15s;
+}
+.row-actions button:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+}
+.row-actions button:active { transform: translateY(0); filter: brightness(0.95); }
+
+/* 폴더 열기 — 포인트 컬러(파랑) */
+.row-actions .btn-explorer { background: linear-gradient(135deg, var(--accent), #1f5f92); }
+/* 터미널 — 보라 (폴더와 확실히 구분되는 색) */
+.row-actions .btn-terminal { background: linear-gradient(135deg, var(--terminal), var(--terminal-dark)); }
+/* 삭제 — 위험 액션은 계속 빨강 */
+.row-actions .btn-delete { background: linear-gradient(135deg, #e2585f, #ad3a3a); }
+
+.btn-label { display: inline; white-space: nowrap; }
+.btn-icon { display: flex; line-height: 1; }
+.btn-icon svg { width: 16px; height: 16px; }
+
+/* ── 추가 모달 ─────────────────────────────────────────── */
+.modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); align-items: center; justify-content: center; z-index: 100; }
+.modal-backdrop.open { display: flex; }
+.modal-box {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  width: 380px;
+  padding: 24px;
+  box-shadow: 0 12px 40px rgba(20,30,50,0.2);
+}
+.modal-box h3 { margin: 0 0 16px; font-size: 17px; color: var(--text); }
+.modal-box input, .modal-box select {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  background: #fff;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 9px 10px;
+  margin: 6px 0;
+  font-size: 13px;
+}
+.modal-box input:focus, .modal-box select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.modal-actions button { border-radius: 999px; padding: 8px 18px; font-weight: 600; font-size: 13px; cursor: pointer; }
+.btn-add { background: var(--accent); color: #fff; border: 1px solid var(--accent); }
+.btn-add:hover { background: var(--accent-hover); }
+.btn-cancel { background: transparent; color: var(--text-dim); border: 1px solid var(--border); }
+.btn-cancel:hover { color: #fff; border-color: #666; }

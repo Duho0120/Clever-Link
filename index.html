@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- 디자인 버전 전환: href만 style-v1.css <-> style-v2.css <-> style-v3.css <-> style-v4.css 로 바꾸면 됨.
+     ⚠ ?v= 뒤 숫자는 WebView2 캐시 무력화용 — 전환할 때마다 숫자를 올려야
+     예전 CSS가 캐시에서 그대로 다시 나오는 문제를 피할 수 있다. -->
+<link rel="stylesheet" href="style-v4.css?v=18" id="themeCss">
+<!-- ⚠ 크기조절 핸들 스타일은 v1~v4 테마 전환과 무관하게 항상 있어야 하므로 외부 css가 아니라 여기 인라인으로 둠 -->
+<style>
+.resize-handle { position: fixed; z-index: 99999; }
+.rz-n, .rz-s { left: 8px; right: 8px; height: 6px; cursor: ns-resize; }
+.rz-n { top: 0; }
+.rz-s { bottom: 0; }
+.rz-w, .rz-e { top: 8px; bottom: 8px; width: 6px; cursor: ew-resize; }
+.rz-w { left: 0; }
+.rz-e { right: 0; }
+.rz-nw, .rz-ne, .rz-sw, .rz-se { width: 10px; height: 10px; }
+.rz-nw { top: 0; left: 0; cursor: nwse-resize; }
+.rz-se { bottom: 0; right: 0; cursor: nwse-resize; }
+.rz-ne { top: 0; right: 0; cursor: nesw-resize; }
+.rz-sw { bottom: 0; left: 0; cursor: nesw-resize; }
+</style>
+</head>
+<body>
+
+<div class="header-row">
+  <!-- ⚠ 프레임리스 창: OS 타이틀바가 없어서 이 영역이 드래그 이동 담당 (id="titlebarDrag", initWindowControls()에서 리스너 연결) -->
+  <div class="header-row-inner" id="titlebarDrag">
+    <div class="header-title">
+      <span class="header-logo"><img src="logo.png?v=3" alt="CLEVER Link"></span>
+      <div class="header-title-text">
+        <h2>CLEVER Link</h2>
+        <img class="header-wordmark" src="wordmark.png?v=1" alt="Clever Link">
+        <span class="header-subtitle">Mount Program</span>
+      </div>
+    </div>
+    <div class="header-actions" style="display:flex; gap:8px; align-items:center;">
+      <select id="wardSelect" onchange="onWardChange()">
+        <option value="">Ward 선택...</option>
+      </select>
+      <button class="btn-cancel" onclick="syncSheetNow()" title="구글 시트를 지금 바로 확인합니다 (자동으로도 주기적으로 확인됨)">↻ 시트 새로고침</button>
+      <button class="btn-open-add" onclick="openAddModal()">+ 추가</button>
+    </div>
+  </div>
+  <!-- 네이티브 최소화/최대화/닫기 버튼 대체 (프레임리스라 직접 그려야 함) -->
+  <div class="window-controls">
+    <button class="win-btn win-minimize" onclick="minimizeWindow()" title="최소화">
+      <svg viewBox="0 0 12 12"><line x1="2" y1="6" x2="10" y2="6" stroke="currentColor" stroke-width="1.2"/></svg>
+    </button>
+    <button class="win-btn win-maximize" onclick="toggleMaximizeWindow()" title="최대화">
+      <span id="maximizeIcon"><svg viewBox="0 0 12 12"><rect x="2.5" y="2.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></span>
+    </button>
+    <button class="win-btn win-close" onclick="closeWindow()" title="닫기">
+      <svg viewBox="0 0 12 12"><line x1="2.5" y1="2.5" x2="9.5" y2="9.5" stroke="currentColor" stroke-width="1.2"/><line x1="9.5" y1="2.5" x2="2.5" y2="9.5" stroke="currentColor" stroke-width="1.2"/></svg>
+    </button>
+  </div>
+</div>
+<!-- ⚠ 프레임리스 창: body 전체가 스크롤되면 세로 스크롤바가 헤더(툴바) 옆까지 걸쳐서 나온다.
+     헤더는 flex-shrink:0으로 고정하고, 이 안쪽만 스크롤되게 분리해서 스크롤바가 툴바 아래 본문 영역에만 나오게 함. -->
+<div id="mainScroll">
+<div id="duplicateIpWarning" class="sheet-issue-warning" style="display:none;"></div>
+<div id="profileList"></div>
+<div id="sheetIssueWarning" class="sheet-issue-warning" style="display:none;"></div>
+<div id="sheetGhostWarning" class="sheet-ghost-warning" style="display:none;"></div>
+<div id="status"></div>
+<div id="mdnsAmbiguousWarning" class="mdns-ambiguous-warning" style="display:none;"></div>
+<div id="macMismatchWarning" class="mdns-ambiguous-warning" style="display:none;"></div>
+<div id="macResolvedInfo" class="mac-resolved-info" style="display:none;"></div>
+<div id="sheetDivergedNotice" class="sheet-diverged-notice" style="display:none;"></div>
+</div>
+
+<div id="addModalBackdrop" class="modal-backdrop" onclick="if (event.target === this) closeAddModal()">
+  <div class="modal-box">
+    <h3>새 원격지 추가</h3>
+    <input id="f_ward" list="wardDatalist" placeholder="Ward (기존 이름 선택 또는 새 이름 입력)">
+    <datalist id="wardDatalist"></datalist>
+    <input id="f_name" placeholder="원격지 이름 (예: Room 번호)">
+    <input id="f_host" placeholder="호스트 (예: 127.0.0.1)">
+    <input id="f_username" placeholder="계정명">
+    <input id="f_port" placeholder="포트" value="22">
+    <select id="f_auth">
+      <option value="password">비밀번호</option>
+      <option value="key_file">개인키 파일</option>
+    </select>
+    <input id="f_secret" placeholder="비밀번호 또는 키 경로">
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeAddModal()">취소</button>
+      <button class="btn-add" onclick="addProfile()">추가</button>
+    </div>
+  </div>
+</div>
+
+<!-- ⚠ 13번 엣지케이스 대응: 재탐색으로 IP 후보가 여러 개 나왔을 때(3번 기능) 사용자가
+     직접 확인한 올바른 IP로 여기서 바로 고칠 수 있게 하는 "정보 수정" 모달.
+     "+ 추가" 모달과 거의 같은 구성이지만 이름은 고정(수정 불가)이고 저장 시
+     add_profile이 아니라 update_profile을 호출한다. -->
+<div id="editModalBackdrop" class="modal-backdrop" onclick="if (event.target === this) closeEditModal()">
+  <div class="modal-box">
+    <h3 id="editModalTitle">원격지 정보 수정</h3>
+    <input id="ef_ward" list="wardDatalist" placeholder="Ward (기존 이름 선택 또는 새 이름 입력)">
+    <input id="ef_name" disabled>
+    <input id="ef_host" placeholder="호스트 (예: 127.0.0.1)">
+    <input id="ef_username" placeholder="계정명">
+    <input id="ef_port" placeholder="포트" value="22">
+    <select id="ef_auth">
+      <option value="password">비밀번호</option>
+      <option value="key_file">개인키 파일</option>
+    </select>
+    <input id="ef_secret" placeholder="비밀번호 또는 키 경로">
+    <hr style="border-color: var(--border); margin: 4px 0;">
+    <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 2px;">
+      IP 재탐색용 — 비워두면 다음 접속 시 자동으로 채워집니다.
+    </div>
+    <input id="ef_mac" placeholder="MAC 주소 (예: aa-bb-cc-dd-ee-ff, 선택)">
+    <input id="ef_hostname" placeholder="호스트 이름 (mDNS/avahi용, 선택)">
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeEditModal()">취소</button>
+      <button class="btn-add" onclick="submitEditProfile()">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- ⚠ 프레임리스 창: OS 기본 크기조절 테두리가 없어서 직접 그려야 함. 각 가장자리/모서리에
+     보이지 않는 얇은 히트 영역을 깔고, 드래그하면 JS가 목표 크기를 계산해 resize_window()로 넘긴다. -->
+<div class="resize-handle rz-n" data-edge="n"></div>
+<div class="resize-handle rz-s" data-edge="s"></div>
+<div class="resize-handle rz-w" data-edge="w"></div>
+<div class="resize-handle rz-e" data-edge="e"></div>
+<div class="resize-handle rz-nw" data-edge="nw"></div>
+<div class="resize-handle rz-ne" data-edge="ne"></div>
+<div class="resize-handle rz-sw" data-edge="sw"></div>
+<div class="resize-handle rz-se" data-edge="se"></div>
+
+<script>
+function setStatus(msg) {
+    document.getElementById('status').innerText = msg;
+}
+
+// V2/V3 디자인용 모노톤 SVG 아이콘 (RaiDrive처럼 통일된 선 굵기의 아이콘 세트로 통일하기 위함).
+// V1은 .row-icon/.btn-icon을 display:none 처리하므로 이 마크업이 실제로 그려지진 않는다.
+const ICONS = {
+    // ⚠ V3: 예전엔 서버랙 모양이었는데 원 두 개 때문에 디스크처럼 보인다는 피드백으로
+    // Ward(병동) 맥락에 맞는 병원 건물 아이콘으로 교체함. (층 구분선 + 문으로 건물감 보강한 버전)
+    server: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="1"/><path d="M4 13h16"/><path d="M12 6v4M10 8h4"/><path d="M10 21v-3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v3"/></svg>',
+    folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>',
+    terminal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>',
+    trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"/><path d="M10 11v6M14 11v6"/></svg>',
+    edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>',
+    // 프레임리스 창 컨트롤 버튼용 — 최대화<->복원 아이콘은 toggleMaximizeWindow()에서 서로 교체
+    maximize: '<svg viewBox="0 0 12 12"><rect x="2.5" y="2.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>',
+    restore: '<svg viewBox="0 0 12 12"><rect x="2" y="4" width="6" height="6" fill="none" stroke="currentColor" stroke-width="1.1"/><rect x="4" y="2" width="6" height="6" fill="none" stroke="currentColor" stroke-width="1.1"/></svg>',
+};
+
+// ── 프레임리스 창 전용: 타이틀바 드래그 이동 + 최소화/최대화/닫기 버튼 ──────────────
+// ⚠ pywebview의 Windows(WinForms) 백엔드는 easy_drag가 구현돼 있지 않아서
+// (gtk/qt/cocoa에만 있음) 마우스 이동을 직접 감지해서 window.move()를 호출해야 한다.
+let _winX = 0, _winY = 0;              // 마지막으로 알고 있는 창 위치 (매 이동마다 갱신)
+let _dragging = false;
+let _dragStartScreenX = 0, _dragStartScreenY = 0;
+let _dragStartWinX = 0, _dragStartWinY = 0;
+let _dragRAFPending = false;
+let _latestDragEvent = null;
+
+function startTitlebarDrag(e) {
+    if (e.target.closest('select, button')) return;  // 드롭다운/버튼 클릭은 드래그로 취급 안 함
+    _dragging = true;
+    _dragStartScreenX = e.screenX;
+    _dragStartScreenY = e.screenY;
+    _dragStartWinX = _winX;
+    _dragStartWinY = _winY;
+}
+
+function onDocMouseMove(e) {
+    if (!_dragging) return;
+    _latestDragEvent = e;
+    // ⚠ mousemove가 프레임보다 훨씬 자주 발생해서 매번 python 호출하면 밀림 —
+    // requestAnimationFrame으로 한 프레임에 한 번만 최신 위치를 반영한다.
+    if (!_dragRAFPending) {
+        _dragRAFPending = true;
+        requestAnimationFrame(applyTitlebarDrag);
+    }
+}
+
+function applyTitlebarDrag() {
+    _dragRAFPending = false;
+    if (!_dragging || !_latestDragEvent) return;
+    const dx = _latestDragEvent.screenX - _dragStartScreenX;
+    const dy = _latestDragEvent.screenY - _dragStartScreenY;
+    _winX = _dragStartWinX + dx;
+    _winY = _dragStartWinY + dy;
+    window.pywebview.api.move_window(_winX, _winY);
+}
+
+function stopTitlebarDrag() {
+    _dragging = false;
+}
+
+async function minimizeWindow() {
+    await window.pywebview.api.minimize_window();
+}
+
+async function toggleMaximizeWindow() {
+    const result = await window.pywebview.api.toggle_maximize_window();
+    document.getElementById('maximizeIcon').innerHTML = result.maximized ? ICONS.restore : ICONS.maximize;
+}
+
+async function closeWindow() {
+    await window.pywebview.api.close_window();
+}
+
+async function initWindowControls() {
+    const pos = await window.pywebview.api.get_window_position();
+    _winX = pos.x;
+    _winY = pos.y;
+
+    const dragEl = document.getElementById('titlebarDrag');
+    dragEl.addEventListener('mousedown', startTitlebarDrag);
+    dragEl.addEventListener('dblclick', (e) => {
+        if (e.target.closest('select, button')) return;
+        toggleMaximizeWindow();
+    });
+    document.addEventListener('mousemove', onDocMouseMove);
+    document.addEventListener('mouseup', stopTitlebarDrag);
+
+    initResizeHandles();
+}
+
+// ── 프레임리스 창 전용: 가장자리 드래그로 크기조절 ──────────────────────────────
+// ⚠ 위 드래그 이동과 같은 이유(WinForms 백엔드에 OS 기본 크기조절 테두리가 없음)로
+// resize_window()를 통해 python webview.Window.resize()를 직접 호출해야 한다.
+const RESIZE_FIXPOINT = {  // FixPoint 비트값: NORTH=1, WEST=2, EAST=4, SOUTH=8 — 반대쪽 가장자리를 고정
+    n: 8 | 2, s: 1 | 2, w: 1 | 4, e: 1 | 2,
+    nw: 8 | 4, ne: 8 | 2, sw: 1 | 4, se: 1 | 2,
+};
+const MIN_WIN_W = 960, MIN_WIN_H = 480;  // min_size와 동일 — app_ui.py 참고
+
+let _resizing = false;
+let _resizeEdge = null;
+let _resizeStartScreenX = 0, _resizeStartScreenY = 0;
+let _resizeStartW = 0, _resizeStartH = 0;
+let _resizeRAFPending = false;
+let _latestResizeEvent = null;
+
+function startResize(e, edge) {
+    _resizing = true;
+    _resizeEdge = edge;
+    _resizeStartScreenX = e.screenX;
+    _resizeStartScreenY = e.screenY;
+    e.preventDefault();
+    e.stopPropagation();
+    window.pywebview.api.get_window_size().then(size => {
+        _resizeStartW = size.width;
+        _resizeStartH = size.height;
+    });
+}
+
+function onResizeMouseMove(e) {
+    if (!_resizing) return;
+    _latestResizeEvent = e;
+    if (!_resizeRAFPending) {
+        _resizeRAFPending = true;
+        requestAnimationFrame(applyResize);
+    }
+}
+
+function applyResize() {
+    _resizeRAFPending = false;
+    if (!_resizing || !_latestResizeEvent) return;
+    const dx = _latestResizeEvent.screenX - _resizeStartScreenX;
+    const dy = _latestResizeEvent.screenY - _resizeStartScreenY;
+    let w = _resizeStartW, h = _resizeStartH;
+    if (_resizeEdge.includes('e')) w = _resizeStartW + dx;
+    if (_resizeEdge.includes('w')) w = _resizeStartW - dx;
+    if (_resizeEdge.includes('s')) h = _resizeStartH + dy;
+    if (_resizeEdge.includes('n')) h = _resizeStartH - dy;
+    w = Math.max(MIN_WIN_W, Math.round(w));
+    h = Math.max(MIN_WIN_H, Math.round(h));
+    window.pywebview.api.resize_window(w, h, RESIZE_FIXPOINT[_resizeEdge]);
+}
+
+function stopResize() {
+    _resizing = false;
+    _resizeEdge = null;
+}
+
+function initResizeHandles() {
+    document.querySelectorAll('.resize-handle').forEach(el => {
+        el.addEventListener('mousedown', (e) => startResize(e, el.dataset.edge));
+    });
+    document.addEventListener('mousemove', onResizeMouseMove);
+    document.addEventListener('mouseup', stopResize);
+}
+
+// ⚠ Phase 4: Ward는 원격지가 아니라 원격지(Room)를 걸러 보여주는 상위 선택 항목이다.
+// 선택 전에는 목록을 비워둔다 — 전체를 한꺼번에 보여주면 애초에 Ward로 나누는 의미가 없고,
+// 로그인/역할 개념이 없는 앱이라 "기본으로 어떤 Ward를 보여줄지" 정할 기준도 없다.
+let currentWard = '';
+let _currentWardProfileNames = [];  // refreshMdnsWarningBanner()에서 필터링 용도
+
+async function loadWards() {
+    const wards = await window.pywebview.api.get_wards();
+    const select = document.getElementById('wardSelect');
+    const previous = select.value;
+    select.innerHTML = '<option value="">Ward 선택...</option>' +
+        wards.map(w => `<option value="${w}">${w}</option>`).join('');
+    if (wards.includes(previous)) select.value = previous;
+
+    const datalist = document.getElementById('wardDatalist');
+    datalist.innerHTML = wards.map(w => `<option value="${w}">`).join('');
+}
+
+function onWardChange() {
+    currentWard = document.getElementById('wardSelect').value;
+    loadProfiles();
+}
+
+async function syncSheetNow() {
+    setStatus('구글 시트 확인 중...');
+    const result = await window.pywebview.api.sync_from_sheet();
+    if (result.ok) {
+        setStatus(`시트 동기화 완료 (추가 ${result.added}개, 갱신 ${result.updated}개)`);
+        await loadWards();
+        await loadProfiles();
+        await refreshDuplicateIpWarning();
+    } else {
+        setStatus('시트 동기화 오류: ' + result.error);
+    }
+}
+
+// ⚠ mDNS 후보 여러 개 에러는 메시지 자체가 길고, 빨간 배너에도 똑같은 내용이 이미
+// 나오므로 상태줄(노란 줄)에는 짧게만 띄우고 나머지는 배너로 몰아준다(중복 방지).
+// 다른 종류의 에러는 지금처럼 상태줄에 그대로 전체 내용을 보여준다.
+const MDNS_AMBIGUOUS_MARKER = 'mDNS 응답이 여러 개 발견되었습니다';
+function statusForError(prefix, error) {
+    if (error && error.includes(MDNS_AMBIGUOUS_MARKER)) {
+        return `${prefix} — 아래 경고 배너를 확인하세요`;
+    }
+    return `${prefix}: ${error}`;
+}
+
+// ⚠ X는 "완전히 무시"가 아니라 "잠깐 숨김"이다 — 백엔드의 seq(mark()마다 올라가는
+// 일련번호)를 같이 기억해뒀다가, 나중에 같은 원격지에서 seq가 더 큰(=재시도해서 새로
+// 감지된) 문제가 생기면 닫았던 기록을 무시하고 다시 보여준다(사용자 확인 2026-08-06).
+// {name: 닫을 당시의 seq} 형태.
+let _dismissedAmbiguous = new Map();
+
+function dismissMdnsWarning(namesWithSeq) {
+    for (const [name, seq] of namesWithSeq) _dismissedAmbiguous.set(name, seq);
+    refreshMdnsWarningBanner();
+}
+
+// ⚠ MAC 불일치 경고(13번 2차 안전장치)는 mDNS 후보 경고와 달리 재접속한다고 저절로
+// 해소되지 않는다(백엔드에서 일부러 자동으로 안 지움 — mac_mismatch_state.py 참고).
+// 그래서 X로 닫아도 "문제 해소"가 아니라 "일단 숨김"일 뿐이고, 그 뒤로도 계속 재시도해서
+// 같은 문제가 다시 감지되면(seq 증가) 다시 뜬다.
+let _dismissedMismatch = new Map();
+
+function dismissMacMismatchWarning(namesWithSeq) {
+    for (const [name, seq] of namesWithSeq) _dismissedMismatch.set(name, seq);
+    refreshMacMismatchBanner();
+}
+
+async function refreshMacMismatchBanner() {
+    const mmEl = document.getElementById('macMismatchWarning');
+    const allMismatched = await window.pywebview.api.get_mac_mismatch_profiles();
+    const stillPresent = new Set(allMismatched.map(m => m.name));
+    for (const name of [..._dismissedMismatch.keys()]) {
+        if (!stillPresent.has(name)) _dismissedMismatch.delete(name);
+    }
+
+    const mismatchedHere = allMismatched.filter(m =>
+        _currentWardProfileNames.includes(m.name) &&
+        _dismissedMismatch.get(m.name) !== m.seq
+    );
+    if (mismatchedHere.length > 0) {
+        mmEl.style.display = 'block';
+        const namesWithSeq = mismatchedHere.map(m => [m.name, m.seq]);
+        mmEl.innerHTML =
+            `<button class="amb-close" title="일단 숨기기 (문제는 저절로 안 없어짐 — '수정'으로 확인 후 반영해야 함, 그전에 다시 재시도하면 또 뜸)" ` +
+            `onclick='dismissMacMismatchWarning(${JSON.stringify(namesWithSeq)})'>&times;</button>` +
+            '🚨 아래 원격지는 접속을 시도했지만, 실제로 연결된 장비의 MAC 주소가 저장되어 있던 ' +
+            '값과 달라서 <b>자동으로 마운트/접속을 차단</b>했습니다. 계정/비밀번호가 우연히 같은 ' +
+            '<b>다른 장비</b>일 위험이 있기 때문입니다. 아래 "지금 연결된 장비" MAC이 실제로 맞는 ' +
+            '장비의 것이라고 확인되면, "수정" 버튼으로 그 값을 새 기준값으로 입력해주세요 — 그러면 ' +
+            '다음 시도부터 다시 정상적으로 접속됩니다.' +
+            mismatchedHere.map(m =>
+                `<div class="amb-item">· <b>${m.name}</b>:<br>` +
+                `&nbsp;&nbsp;저장된 MAC(예전 기준): ${m.stored_mac}<br>` +
+                `&nbsp;&nbsp;지금 연결된 장비의 MAC: ${m.actual_mac}` +
+                (m.actual_mac_owner
+                    ? `<br>&nbsp;&nbsp;<b>→ 이 MAC은 이미 등록된 다른 원격지 '${m.actual_mac_owner}'의 기준 MAC과 같습니다.</b>`
+                    : '') +
+                `</div>`
+            ).join('');
+    } else {
+        mmEl.style.display = 'none';
+        mmEl.innerHTML = '';
+    }
+}
+
+// ⚠ MAC 불일치가 "방금 해소됨"으로 바뀐 걸 알려주는 초록 확인 배너. 빨간 배너들과
+// 달리 재접속해도 스스로 안 사라지고(백엔드가 전환 시점에만 mark하고 이후엔 그대로
+// 유지) 사용자가 X로 직접 닫아야 없어진다 — "확인했다"는 의미가 있는 배너라서.
+let _dismissedResolved = new Set();
+
+function dismissMacResolvedInfo(names) {
+    for (const name of names) _dismissedResolved.add(name);
+    refreshMacResolvedBanner();
+}
+
+async function refreshMacResolvedBanner() {
+    const mrEl = document.getElementById('macResolvedInfo');
+    const allResolved = await window.pywebview.api.get_mac_resolved_profiles();
+    const stillPresent = new Set(allResolved.map(m => m.name));
+    for (const name of [..._dismissedResolved]) {
+        if (!stillPresent.has(name)) _dismissedResolved.delete(name);
+    }
+
+    const resolvedHere = allResolved.filter(m =>
+        _currentWardProfileNames.includes(m.name) && !_dismissedResolved.has(m.name)
+    );
+    if (resolvedHere.length > 0) {
+        mrEl.style.display = 'block';
+        const names = resolvedHere.map(m => m.name);
+        mrEl.innerHTML =
+            `<button class="amb-close" title="닫기" ` +
+            `onclick='dismissMacResolvedInfo(${JSON.stringify(names)})'>&times;</button>` +
+            '✅ 아래 원격지는 MAC 주소가 저장된 기준값과 다시 일치하는 것이 확인되어, ' +
+            '경고가 해소되었습니다.' +
+            resolvedHere.map(m =>
+                `<div class="amb-item">· <b>${m.name}</b>: ${m.mac}</div>`
+            ).join('');
+    } else {
+        mrEl.style.display = 'none';
+        mrEl.innerHTML = '';
+    }
+}
+
+// 5번 기능 — profiles.json에 같은 IP(host+port)를 쓰는 원격지가 2개 이상 있으면 경고.
+// ⚠ Ward 상관없이 앱 전체 기준(같은 IP가 서로 다른 Ward에 걸쳐 겹치는 실제 사례가 있었음)
+// 이라 loadProfiles()의 Ward 필터링과 무관하게 항상 그대로 보여준다.
+async function refreshDuplicateIpWarning() {
+    const dupEl = document.getElementById('duplicateIpWarning');
+    const groups = await window.pywebview.api.get_duplicate_ip_groups();
+    if (groups.length > 0) {
+        dupEl.style.display = 'block';
+        dupEl.innerHTML = `⚠️ 같은 Ward 안에서 같은 계정으로 같은 주소를 쓰는 원격지가 ${groups.length}건 있습니다. ` +
+            '엉뚱한 쪽에 연결될 수 있으니 시트를 확인해보세요.' +
+            groups.map(g =>
+                `<div style="margin-top:4px;">· [${g.ward || '(Ward 없음)'}] ${g.username}@${g.host}:${g.port} — ${g.names.join(', ')}</div>`
+            ).join('');
+    } else {
+        dupEl.style.display = 'none';
+        dupEl.innerHTML = '';
+    }
+}
+
+// ⚠ 시트-로컬 불일치 안내는 X로 안 지워짐 — 다음 "↻ 시트 새로고침"(수동/자동 둘 다)이
+// 그 프로파일을 처리하는 순간 백엔드에서 자동으로 해소된다.
+async function refreshSheetDivergedNotice() {
+    const sdEl = document.getElementById('sheetDivergedNotice');
+    const allDiverged = await window.pywebview.api.get_sheet_diverged_profiles();
+    const divergedHere = allDiverged.filter(d => _currentWardProfileNames.includes(d.name));
+    if (divergedHere.length > 0) {
+        sdEl.style.display = 'block';
+        sdEl.innerHTML =
+            '⚠️ 아래 원격지는 IP 자동 재탐색으로 로컬에서만 주소가 교정되어, 구글 시트에 ' +
+            '적힌 값과 달라진 상태입니다. 시트를 새로고침하면 시트 값으로 되돌아갈 수 있으니, ' +
+            '필요하면 시트도 함께 업데이트해주세요.' +
+            divergedHere.map(d =>
+                `<div class="amb-item">· <b>${d.name}</b>: 시트 ${d.sheet_host} → 지금 사용 중 ${d.local_host}</div>`
+            ).join('');
+    } else {
+        sdEl.style.display = 'none';
+        sdEl.innerHTML = '';
+    }
+}
+
+async function refreshMdnsWarningBanner() {
+    const ambEl = document.getElementById('mdnsAmbiguousWarning');
+    const allAmbiguous = await window.pywebview.api.get_mdns_ambiguous_profiles();
+    const stillPresent = new Set(allAmbiguous.map(a => a.name));
+    for (const name of [..._dismissedAmbiguous.keys()]) {
+        if (!stillPresent.has(name)) _dismissedAmbiguous.delete(name);
+    }
+
+    // ⚠ 닫은 적 있어도, 지금 백엔드의 seq가 닫을 당시보다 크면(=그 사이 재시도로 새로
+    // 감지된 것) 다시 보여준다 — "잠깐 숨김"이지 "완전히 무시"가 아니기 때문.
+    const ambiguousHere = allAmbiguous.filter(a =>
+        _currentWardProfileNames.includes(a.name) &&
+        _dismissedAmbiguous.get(a.name) !== a.seq
+    );
+    if (ambiguousHere.length > 0) {
+        ambEl.style.display = 'block';
+        const namesWithSeq = ambiguousHere.map(a => [a.name, a.seq]);
+        ambEl.innerHTML =
+            `<button class="amb-close" title="일단 숨기기 (문제가 해소되면 자동으로도 사라지고, 그전에 다시 감지되면 다시 뜹니다)" ` +
+            `onclick='dismissMdnsWarning(${JSON.stringify(namesWithSeq)})'>&times;</button>` +
+            '⚠️ 아래 원격지는 호스트 이름으로 IP를 재탐색했더니 후보가 여러 개 발견되어, ' +
+            '엉뚱한 장비에 연결될 위험이 있어 자동으로 선택하지 않았습니다. 아래 후보들을 직접 확인한 뒤, ' +
+            '"수정" 버튼으로 올바른 IP를 입력해주세요.' +
+            ambiguousHere.map(a =>
+                `<div class="amb-item">· <b>${a.name}</b> (호스트 이름 '${a.hostname}'):<br>` +
+                a.candidates.map(ip => `&nbsp;&nbsp;${ip}`).join('<br>') +
+                `</div>`
+            ).join('');
+    } else {
+        ambEl.style.display = 'none';
+        ambEl.innerHTML = '';
+    }
+}
+
+async function loadProfiles() {
+    const container = document.getElementById('profileList');
+    const warningEl = document.getElementById('sheetIssueWarning');
+    const ghostEl = document.getElementById('sheetGhostWarning');
+    const ambEl = document.getElementById('mdnsAmbiguousWarning');
+    container.innerHTML = '';
+    warningEl.style.display = 'none';
+    ghostEl.style.display = 'none';
+    ghostEl.innerHTML = '';
+    ambEl.style.display = 'none';
+    ambEl.innerHTML = '';
+
+    if (!currentWard) {
+        container.innerHTML = '<p>Ward를 선택하면 그 Ward에 속한 원격지가 여기에 표시됩니다.</p>';
+        return;
+    }
+
+    const names = await window.pywebview.api.get_profiles_in_ward(currentWard);
+
+    // ⚠ 구글 시트에는 있지만 Room/IP 등 정보가 부족해서 원격지로 등록 못 한 행이 있으면
+    // 에러를 띄우거나 앱을 막지 않고, 빨간 글씨로 개수만 조용히 안내한다.
+    const issueCount = await window.pywebview.api.get_sheet_issue_count(currentWard);
+    if (issueCount > 0) {
+        warningEl.textContent = `⚠️ 시트에는 있지만 통합앱에서 연결하지 못한 원격지가 ${issueCount}개 있습니다. 시트를 확인해주세요!`;
+        warningEl.style.display = 'block';
+    }
+
+    // ⚠ Phase 4-5: 시트에서 사라진 프로파일은 자동으로 안 지우고(실수로 잠깐 지워진
+    // 것일 수도 있어서), 여기 목록으로만 보여주고 사람이 확인 후 직접 지우게 한다.
+    const ghosts = await window.pywebview.api.get_ghost_profiles(currentWard);
+    if (ghosts.length > 0) {
+        ghostEl.style.display = 'block';
+        ghostEl.innerHTML = `⚠️ 시트에서는 사라졌지만 아직 등록되어 있는 원격지가 ${ghosts.length}개 있습니다: ` +
+            ghosts.map(name =>
+                `<span style="margin-left:6px;">${name} <button class="btn-delete" style="padding:2px 6px; font-size:12px;" onclick="removeProfile('${name}')">삭제</button></span>`
+            ).join('');
+    }
+
+    // ⚠ 3번 기능 — 이 Ward에 있는 원격지 중, mDNS 재탐색 시 후보 IP가 여러 개 나와서
+    // 자동으로 고르지 못하고 멈춘 게 있으면 빨간 배너로 계속 안내한다. 문제가 실제로
+    // 해소되면(재탐색 없이 정상 접속되거나, 후보가 1개로 좁혀지면) 백엔드에서 자동으로
+    // 목록에서 빠지므로 여기서 따로 "닫기" 처리 없이 새로고침마다 최신 상태만 보여주면 된다.
+    _currentWardProfileNames = names;
+    await refreshMdnsWarningBanner();
+    await refreshMacMismatchBanner();
+    await refreshMacResolvedBanner();
+    await refreshSheetDivergedNotice();
+    await refreshDuplicateIpWarning();
+
+    if (names.length === 0) {
+        container.innerHTML = '<p>이 Ward에 등록된 원격지가 없습니다.</p>';
+        return;
+    }
+
+    for (const name of names) {
+        const row = document.createElement('div');
+        row.className = 'profile-row';
+        row.innerHTML = `
+            <div class="row-icon">${ICONS.server}</div>
+            <div class="row-main">
+                <div class="row-title-line"><span class="profile-name">${name}</span></div>
+                <div class="row-status-line">
+                    <span class="mount-badge off" id="mountbadge_${name}">
+                        <span class="mount-dot" id="dot_${name}"></span>
+                        <span class="mount-text" id="mounttext_${name}">확인 중...</span>
+                    </span>
+                </div>
+            </div>
+            <select id="volume_${name}" class="volume-select" onchange="onVolumeChange('${name}')"><option value="/">/(홈 디렉터리)</option></select>
+            <div class="row-actions">
+                <button class="btn-explorer" title="폴더" onclick="openExplorer('${name}')"><span class="btn-icon">${ICONS.folder}</span><span class="btn-label">폴더</span></button>
+                <button class="btn-terminal" title="터미널" onclick="openTerminalWindow('${name}')"><span class="btn-icon">${ICONS.terminal}</span><span class="btn-label">터미널</span></button>
+                <button class="btn-edit" title="정보 수정" onclick="openEditModal('${name}')"><span class="btn-icon">${ICONS.edit}</span><span class="btn-label">수정</span></button>
+                <button class="btn-delete" title="삭제" onclick="removeProfile('${name}')"><span class="btn-icon">${ICONS.trash}</span><span class="btn-label">삭제</span></button>
+            </div>
+        `;
+        container.appendChild(row);
+
+        // ⚠ Windows 드라이브 문자는 더 이상 사용자가 고르지 않는다 (자동 배정).
+        // 서버에 실제로 존재하는 볼륨 목록은 SSH 조회가 걸리므로 목록 렌더링을 막지 않고 뒤에서 채움
+        loadVolumeOptions(name);
+        updateMountStatus(name);
+    }
+}
+
+async function loadVolumeOptions(name) {
+    const select = document.getElementById('volume_' + name);
+    if (!select) return;
+    select.innerHTML = '<option value="/">조회 중...</option>';
+    const result = await window.pywebview.api.get_remote_volumes(name);
+    if (!select.isConnected) return;  // 조회 중 화면이 새로고침되어 사라졌으면 중단
+
+    if (result.ok && result.volumes.length > 0) {
+        select.innerHTML = result.volumes.map(v =>
+            `<option value="${v.mount_point}">${v.mount_point} (${v.avail} 여유)</option>`
+        ).join('');
+    } else {
+        select.innerHTML = '<option value="/">/(홈 디렉터리)</option>';
+        if (!result.ok) {
+            setStatus(statusForError(`'${name}' 볼륨 조회 실패`, result.error));
+            refreshMdnsWarningBanner();  // mDNS 후보 여러 개 문제였을 수 있으니 배너도 바로 갱신
+        }
+    }
+    // ⚠ MAC 불일치는 "접속 성공"했을 때 감지되므로(실패가 아니라), 성공/실패 상관없이 항상 갱신
+    refreshMacMismatchBanner();
+    refreshMacResolvedBanner();
+    refreshSheetDivergedNotice();
+
+    // ⚠ 이미 마운트되어 있으면, 드롭다운 기본 선택을 실제 연결된 볼륨으로 맞춘다.
+    // (안 그러면 새로고침 후 드롭다운은 목록 맨 위를 보여주는데 실제로는 다른 볼륨에
+    //  연결되어 있는 상태가 되어, [폴더] 상태 메시지가 실제와 다르게 나올 수 있었음)
+    const current = await window.pywebview.api.get_current_volume(name);
+    if (current) {
+        for (const opt of select.options) {
+            if (opt.value === current) { select.value = current; break; }
+        }
+    }
+}
+
+async function onVolumeChange(name) {
+    // ⚠ F-3: [마운트] 버튼을 없애는 대신, 드롭다운에서 볼륨을 고르는 즉시 자동으로 (재)마운트한다.
+    const volumeSelect = document.getElementById('volume_' + name);
+    const remotePath = volumeSelect ? volumeSelect.value : '/';
+    setStatus('볼륨 전환 중...');
+    const result = await window.pywebview.api.do_mount(name, remotePath);
+    setStatus(result.ok ? `'${name}' -> ${remotePath} 마운트 완료` : statusForError('오류', result.error));
+    updateMountStatus(name);
+    refreshMdnsWarningBanner();
+    refreshMacMismatchBanner();
+    refreshMacResolvedBanner();
+    refreshSheetDivergedNotice();
+}
+
+// V2 디자인의 마운트 상태 표시줄(점 + 텍스트)용. 기존 get_current_drive/get_current_volume API를
+// 재사용할 뿐 새 백엔드 호출은 없음 — V1에서는 row-status-line 자체가 숨겨져 있어 영향 없음.
+async function updateMountStatus(name) {
+    const badge = document.getElementById('mountbadge_' + name);
+    const text = document.getElementById('mounttext_' + name);
+    if (!badge || !text) return;
+    const drive = await window.pywebview.api.get_current_drive(name);
+    if (!badge.isConnected) return;
+    if (drive) {
+        const vol = await window.pywebview.api.get_current_volume(name);
+        badge.className = 'mount-badge on';
+        text.textContent = `마운트됨 · ${drive} ${vol || ''}`.trim();
+    } else {
+        badge.className = 'mount-badge off';
+        text.textContent = '마운트 안 됨';
+    }
+}
+
+async function openExplorer(name) {
+    // ⚠ F-3: [폴더] 버튼이 아직 마운트 안 된 경우 현재 선택된 볼륨으로 먼저 자동 마운트한다.
+    let drive = await window.pywebview.api.get_current_drive(name);
+    let remotePath;
+    if (!drive) {
+        const volumeSelect = document.getElementById('volume_' + name);
+        remotePath = volumeSelect ? volumeSelect.value : '/';
+        setStatus('마운트 중...');
+        const mountResult = await window.pywebview.api.do_mount(name, remotePath);
+        if (!mountResult.ok) {
+            setStatus(statusForError('마운트 실패', mountResult.error));
+            refreshMdnsWarningBanner();
+            return;
+        }
+        refreshMacMismatchBanner();  // 마운트 성공 시점에 MAC 불일치가 감지됐을 수 있음
+        refreshMacResolvedBanner();
+        refreshSheetDivergedNotice();
+        drive = mountResult.drive;
+    } else {
+        // 이미 마운트되어 있으면, 드롭다운이 아니라 실제로 연결된 볼륨을 그대로 신뢰한다.
+        remotePath = await window.pywebview.api.get_current_volume(name);
+    }
+    const result = await window.pywebview.api.open_explorer(drive);
+    setStatus(result.ok ? `'${name}' -> ${remotePath} 폴더 열림` : '탐색기 열기 오류: ' + result.error);
+    updateMountStatus(name);
+}
+
+let _editingProfileName = null;
+
+async function openEditModal(name) {
+    const result = await window.pywebview.api.get_profile_for_edit(name);
+    if (!result.ok) {
+        setStatus(`'${name}' 정보 조회 실패: ${result.error}`);
+        return;
+    }
+    _editingProfileName = name;
+    document.getElementById('editModalTitle').textContent = `'${name}' 정보 수정`;
+    document.getElementById('ef_ward').value = result.ward || '';
+    document.getElementById('ef_name').value = name;
+    document.getElementById('ef_host').value = result.host || '';
+    document.getElementById('ef_username').value = result.username || '';
+    document.getElementById('ef_port').value = result.port || 22;
+    document.getElementById('ef_auth').value = result.auth_type || 'password';
+    document.getElementById('ef_secret').value = result.secret || '';
+    document.getElementById('ef_mac').value = result.mac || '';
+    document.getElementById('ef_hostname').value = result.hostname || '';
+    document.getElementById('editModalBackdrop').classList.add('open');
+}
+
+function closeEditModal() {
+    document.getElementById('editModalBackdrop').classList.remove('open');
+    _editingProfileName = null;
+}
+
+// ⚠ 예전엔 host를 고치면 MAC/호스트 이름을 자동으로 비웠는데(onEditHostInput) —
+// "완전히 다른 장비였다"보다 "같은 장비인데 DHCP로 IP만 바뀐 것"이 더 흔한 경우라,
+// MAC/hostname(장비 자체의 정체성)은 host가 바뀌어도 그대로 유지하는 게 맞다고 판단해서
+// 자동 비우기를 없앴다. 정말 다른 장비로 바로잡는 거라면 사용자가 직접 지우면 된다
+// (사용자 확인 2026-08-06).
+
+async function submitEditProfile() {
+    const name = _editingProfileName;
+    if (!name) return;
+
+    const ward = document.getElementById('ef_ward').value;
+    const host = document.getElementById('ef_host').value;
+    const username = document.getElementById('ef_username').value;
+    const port = document.getElementById('ef_port').value;
+    const auth_type = document.getElementById('ef_auth').value;
+    const secret = document.getElementById('ef_secret').value;
+    const mac = document.getElementById('ef_mac').value;
+    const hostname = document.getElementById('ef_hostname').value;
+
+    if (!ward || !host || !username || !secret) {
+        setStatus('모든 항목을 입력하세요 (Ward 포함)');
+        return;
+    }
+
+    closeEditModal();
+    setStatus(`'${name}' 정보 수정 중...`);
+    const result = await window.pywebview.api.update_profile(name, host, username, port, auth_type, secret, ward, mac, hostname);
+
+    if (result.ok) {
+        // Ward가 바뀌었을 수도 있으니(오타 수정 등) 목록 전체를 새로고침
+        await loadWards();
+        document.getElementById('wardSelect').value = ward;
+        currentWard = ward;
+        await loadProfiles();  // 마운트 상태 배지도 여기서 같이 갱신됨
+        await refreshDuplicateIpWarning();
+
+        // ⚠ 마운트 중이던 원격지면 방금 고친 정보로 자동 재마운트를 시도했으므로,
+        // 그 결과까지 같이 안내한다 (성공/실패 상관없이 사용자가 알아야 함).
+        if (result.remount) {
+            if (result.remount.ok) {
+                setStatus(`'${name}' 정보 수정 완료, 마운트되어 있던 드라이브(${result.remount.drive})도 새 정보로 재연결됨`);
+            } else {
+                setStatus(`'${name}' 정보 수정 완료, 다만 재마운트 실패: ${result.remount.error}`);
+            }
+        } else {
+            setStatus(`'${name}' 정보 수정 완료`);
+        }
+    } else {
+        setStatus(`'${name}' 정보 수정 실패: ${result.error}`);
+    }
+}
+
+async function removeProfile(name) {
+    if (!confirm(`'${name}' 원격지를 삭제할까요?`)) return;
+    await window.pywebview.api.remove_profile(name);
+    // 이 Ward의 마지막 원격지였다면 Ward 목록에서도 사라져야 하므로 같이 새로고침
+    await loadWards();
+    if (!document.getElementById('wardSelect').value) currentWard = '';
+    await loadProfiles();
+    await refreshDuplicateIpWarning();
+}
+
+function openAddModal() {
+    document.getElementById('addModalBackdrop').classList.add('open');
+    // 이미 어떤 Ward를 보고 있었다면, 그 Ward에 원격지를 추가하려는 경우가 많을 테니 미리 채워둠
+    // (다른 Ward에 추가하고 싶으면 그냥 다른 이름으로 바꿔 입력하면 됨)
+    const wardField = document.getElementById('f_ward');
+    wardField.value = currentWard || '';
+    if (currentWard) {
+        document.getElementById('f_name').focus();
+    } else {
+        wardField.focus();
+    }
+}
+
+function closeAddModal() {
+    document.getElementById('addModalBackdrop').classList.remove('open');
+    // 다음에 열 때 이전 입력값이 남아있지 않도록 초기화
+    document.getElementById('f_ward').value = '';
+    document.getElementById('f_name').value = '';
+    document.getElementById('f_host').value = '';
+    document.getElementById('f_username').value = '';
+    document.getElementById('f_port').value = '22';
+    document.getElementById('f_secret').value = '';
+}
+
+async function addProfile() {
+    const ward = document.getElementById('f_ward').value;
+    const name = document.getElementById('f_name').value;
+    const host = document.getElementById('f_host').value;
+    const username = document.getElementById('f_username').value;
+    const port = document.getElementById('f_port').value;
+    const auth_type = document.getElementById('f_auth').value;
+    const secret = document.getElementById('f_secret').value;
+
+    if (!ward || !name || !host || !username || !secret) {
+        setStatus('모든 항목을 입력하세요 (Ward 포함)');
+        return;
+    }
+
+    // ⚠ 모달이 열려있는 동안엔 배경(overlay)에 가려서 상태 메시지가 안 보였음.
+    // 클릭 즉시 모달을 닫아 진행 상황이 바로 화면에 보이게 한다.
+    closeAddModal();
+    setStatus('추가 및 자동 마운트 중...');
+    const result = await window.pywebview.api.add_profile(name, host, username, port, auth_type, secret, ward);
+
+    if (result.ok) {
+        // 새 Ward를 입력했을 수도 있으니 Ward 목록부터 새로고침하고, 방금 추가한 원격지가
+        // 바로 보이도록 그 Ward로 전환한다.
+        await loadWards();
+        document.getElementById('wardSelect').value = ward;
+        currentWard = ward;
+        await loadProfiles();
+        await refreshDuplicateIpWarning();
+
+        if (result.drive) {
+            setStatus(`'${name}' 추가 및 자동 마운트 완료`);
+        } else {
+            // ⚠ 마운트만 실패했을 뿐 등록 자체는 이미 완료된 상태라, "다시 입력"이 아니라
+            // 목록에서 재시도(드롭박스 선택/[폴더] 클릭 시 자동 재마운트)하면 된다고 안내한다.
+            setStatus(`'${name}' 등록 완료, 연결 실패: ${result.mount_error} (목록에서 다시 시도할 수 있습니다)`);
+        }
+    } else {
+        // 저장 자체가 실패한 드문 경우에만 다시 입력받도록 모달을 재오픈
+        setStatus('오류: ' + result.error);
+        openAddModal();
+    }
+}
+
+// ── 터미널 관련 ──────────────────────────────────────
+// ⚠ F-5: 터미널은 이 창 안이 아니라 별도의 pywebview 창(terminal.html)으로 띄운다.
+async function openTerminalWindow(name) {
+    const result = await window.pywebview.api.open_terminal_window(name);
+    if (!result.ok) { setStatus('터미널 창 열기 오류: ' + result.error); }
+}
+
+// ⚠ 터미널은 메인 창과 완전히 별도의 창(terminal.html)이라, 그 안에서 mDNS 후보/MAC
+// 불일치 문제가 감지돼도 메인 창은 알 방법이 없다 — 메인 창 배너는 메인 창 자체의
+// 액션(목록 새로고침, 마운트 등)에서만 갱신되기 때문(2026-08-06, 실사용 중 발견).
+// 그래서 주기적으로 배너 상태만 다시 조회해서, 어느 창에서 문제가 생기든 몇 초 안에
+// 메인 창에도 반영되게 한다. ⚠ 시트 동기화(sync_from_sheet)는 절대 안 부름 — 그냥
+// 이미 파이썬 메모리에 있는 상태(mdns_ambiguity_state 등)를 다시 읽어오는 것뿐이라
+// 가볍다.
+let _bannerPollTimer = null;
+
+async function pollBanners() {
+    await refreshMdnsWarningBanner();
+    await refreshMacMismatchBanner();
+    await refreshMacResolvedBanner();
+    await refreshSheetDivergedNotice();
+    await refreshDuplicateIpWarning();
+}
+
+async function init() {
+    await initWindowControls();
+    await loadWards();
+    await loadProfiles();  // currentWard가 비어있으니 안내 문구만 표시됨
+    await refreshDuplicateIpWarning();
+
+    if (!_bannerPollTimer) {
+        _bannerPollTimer = setInterval(pollBanners, 7000);
+    }
+}
+
+window.addEventListener('pywebviewready', init);
+</script>
+
+</body>
+</html>

@@ -1,0 +1,294 @@
+/* V2 — RaiDrive 벤치마킹 디자인 */
+:root {
+  --bg: #17181a;
+  --panel: #1e2023;
+  --panel-hover: #24262a;
+  --header-top: #1a76ad;
+  --header-bottom: #125a86;
+  --accent: #2f8fd6;
+  --accent-hover: #4aa3e0;
+  --text: #f2f2f2;
+  --text-dim: #9aa0a6;
+  --border: #33363a;
+  --danger: #d9534f;
+  --success: #3ac569;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+body {
+  font-family: 'Segoe UI', 'Malgun Gothic', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#mainScroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+h2 { color: #fff; margin: 0; font-size: 18px; font-weight: 600; }
+
+input { padding: 6px; border-radius: 4px; border: 1px solid var(--border); background: #333; color: var(--text); }
+button { padding: 6px 12px; border-radius: 4px; border: none; cursor: pointer; }
+
+/* ── 상단 타이틀바 (RaiDrive 블루 헤더 = 프레임리스 창의 OS 타이틀바 대체) ───────────────────── */
+.header-row {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  background: linear-gradient(180deg, var(--header-top), var(--header-bottom));
+  box-shadow: 0 1px 0 rgba(0,0,0,0.3);
+}
+.header-row-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  padding: 8px 12px 8px 24px;
+  user-select: none;
+}
+
+.window-controls {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+}
+.window-controls .win-btn {
+  width: 44px;
+  border: none;
+  background: transparent;
+  color: rgba(255,255,255,0.85);
+  border-radius: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.window-controls .win-btn svg { width: 11px; height: 11px; }
+.window-controls .win-minimize:hover,
+.window-controls .win-maximize:hover {
+  background: rgba(255,255,255,0.15);
+  color: #fff;
+}
+.window-controls .win-close:hover {
+  background: #e81123;
+  color: #fff;
+}
+.header-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-shrink: 1;
+}
+.header-logo {
+  display: inline-flex;
+  color: #fff;
+  flex-shrink: 0;
+}
+.header-logo img { width: 36px; height: 36px; display: block; }
+.header-title-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  min-width: 0;
+  overflow: hidden;
+}
+.header-wordmark { display: none; }
+.header-title-text h2, .header-subtitle {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.header-subtitle {
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.65);
+}
+
+.header-actions {
+  flex-shrink: 0;
+}
+.header-actions select,
+.header-actions button {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.header-actions > *:not(:last-child) {
+  position: relative;
+  margin-right: 8px;
+  padding-right: 8px;
+}
+.header-actions > *:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 16px;
+  background: rgba(255,255,255,0.25);
+}
+.header-row select {
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.35);
+  color: #fff;
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+.header-row select option { color: #111; }
+.header-row button {
+  background: transparent;
+  border: none;
+  color: #fff;
+  font-weight: 600;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+.header-row button:hover { background: rgba(255,255,255,0.15); }
+
+/* ── 본문 여백 (body padding 대신 각 블록에 개별 부여) ───────── */
+#profileList { padding: 16px 24px 0; }
+.sheet-issue-warning, .sheet-ghost-warning { margin: 8px 24px 0; font-size: 13px; }
+.sheet-issue-warning { color: #ff6b6b; }
+.sheet-ghost-warning { color: #ffb454; }
+#status {
+  margin: 14px 24px 20px;
+  color: #e8c477;
+  min-height: 20px;
+  font-size: 13px;
+}
+
+/* ── 원격지 행 (RaiDrive 드라이브 목록 행 스타일) ─────────────── */
+.profile-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 10px;
+  transition: background .15s, border-color .15s;
+}
+.profile-row:hover { background: var(--panel-hover); border-color: #44474c; }
+
+.row-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  background: linear-gradient(160deg, var(--accent), #1f5f92);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.row-icon svg { width: 22px; height: 22px; }
+
+.row-main { flex: 1; min-width: 0; }
+.row-title-line { display: flex; align-items: baseline; gap: 8px; }
+.profile-name {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.row-status-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.mount-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #5a5f66;
+  flex-shrink: 0;
+}
+.mount-dot.on { background: var(--success); box-shadow: 0 0 0 3px rgba(58,197,105,0.15); }
+.mount-dot.off { background: #5a5f66; }
+
+.volume-select {
+  background: #26282b;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 7px 10px;
+  min-width: 170px;
+  flex-shrink: 0;
+}
+
+/* ── 액션 버튼: RaiDrive처럼 원형 아이콘 버튼으로 ─────────────── */
+.row-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.row-actions button {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 15px;
+  padding: 0;
+  cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.row-actions button:hover { background: rgba(255,255,255,0.08); color: var(--text); }
+.row-actions .btn-terminal:hover { border-color: var(--accent); color: var(--accent); }
+.row-actions .btn-delete:hover { border-color: var(--danger); color: var(--danger); background: rgba(217,83,79,0.12); }
+.btn-label { display: none; }
+.btn-icon { display: flex; line-height: 1; }
+.btn-icon svg { width: 16px; height: 16px; }
+
+/* ── 추가 모달 ─────────────────────────────────────────── */
+.modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); align-items: center; justify-content: center; z-index: 100; }
+.modal-backdrop.open { display: flex; }
+.modal-box {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: 380px;
+  padding: 24px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+}
+.modal-box h3 { margin: 0 0 16px; font-size: 17px; color: #fff; }
+.modal-box input, .modal-box select {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  background: #26282b;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 9px 10px;
+  margin: 6px 0;
+  font-size: 13px;
+}
+.modal-box input:focus, .modal-box select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.modal-actions button { border-radius: 6px; padding: 8px 18px; font-weight: 600; font-size: 13px; cursor: pointer; }
+.btn-add { background: var(--accent); color: #fff; border: 1px solid var(--accent); }
+.btn-add:hover { background: var(--accent-hover); }
+.btn-cancel { background: transparent; color: var(--text-dim); border: 1px solid var(--border); }
+.btn-cancel:hover { color: #fff; border-color: #666; }

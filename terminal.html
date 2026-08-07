@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="xterm.min.css">
+<script src="xterm.min.js"></script>
+<script src="addon-fit.min.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; }
+  body { font-family: 'Malgun Gothic', sans-serif; }
+  #terminalHeader { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #2a2a2a; box-sizing: border-box; }
+  #terminalTitle { color: #ccc; }
+  #reconnectBtn { display: none; background: #7d4a2d; color: white; padding: 6px 12px; border-radius: 4px; border: none; cursor: pointer; }
+  #terminalContainer { height: calc(100% - 40px); padding: 4px; box-sizing: border-box; }
+</style>
+</head>
+<body>
+
+<div id="terminalHeader">
+  <span id="terminalTitle">터미널</span>
+  <button id="reconnectBtn" onclick="reconnectTerminal()">재접속</button>
+</div>
+<div id="terminalContainer"></div>
+
+<script>
+// ⚠ F-5: 터미널을 메인 창의 <div> 패널이 아니라 별도 pywebview 창으로 분리.
+// URL 쿼리스트링(?profile=이름)으로 전달하는 방식은 file:// URL에서 WebView2가
+// 파일을 못 찾는 것으로 처리해버려서(ERR_FILE_NOT_FOUND) 실패했음. 대신 이 창 전용
+// js_api(TerminalApi)가 들고 있는 프로파일 이름을 pywebviewready 이후에 물어본다.
+let profileName = '';
+
+let term = null;
+let fitAddon = null;
+let ws = null;
+
+function initTerminal() {
+    term = new Terminal({
+        cursorBlink: true,
+        fontSize: 14,
+        theme: { background: '#000000' },
+    });
+    fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(document.getElementById('terminalContainer'));
+    fitAddon.fit();
+
+    // 사용자가 키보드 입력 시 -> 서버로 전송
+    term.onData(data => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'input', data: data }));
+        }
+    });
+
+    // ⚠ 창 크기 변경 시 -> 서버에 resize 알림 (vim/htop 화면 깨짐 방지)
+    term.onResize(({ cols, rows }) => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'resize', cols: cols, rows: rows }));
+        }
+    });
+
+    // 별도 창이라 창 자체 크기 변경에 맞춰 터미널도 다시 맞춰야 함
+    window.addEventListener('resize', () => fitAddon.fit());
+
+    // ⚠ 복사/붙여넣기: xterm.js는 기본적으로 클립보드 연동이 없다.
+    // navigator.clipboard.*는 WebView2에 권한 프롬프트 UI가 없어서 조용히 막히는
+    // 경우가 많아 안 쓴다. 복사는 브라우저 네이티브 copy 이벤트(clipboardData)로 처리.
+    // Ctrl+V는 (아래 attachCustomKeyEventHandler에서) 브라우저 네이티브 paste + xterm
+    // 자체 내장 처리에 맡긴다. 우클릭 붙여넣기는 네이티브 paste 이벤트가 안 뜨는
+    // 경로라 이미 떠 있는 tkinter 창의 클립보드를 파이썬 쪽(get_clipboard_text)에서
+    // 대신 읽어오는 방식으로 우회한다.
+
+    async function pasteFromClipboard() {
+        const text = await window.pywebview.api.get_clipboard_text();
+        if (text) term.paste(text);
+    }
+
+    term.attachCustomKeyEventHandler((e) => {
+        if (e.type !== 'keydown') return true;
+
+        // Ctrl+C: 선택된 텍스트가 있으면 복사, 없으면 xterm 기본 동작(SIGINT 전달)을 그대로 둔다.
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && term.hasSelection()) {
+            document.execCommand('copy');
+            e.preventDefault();  // 우리가 이 키를 완전히 책임진다는 뜻으로, 브라우저 기본 동작도 확실히 막는다
+            return false;
+        }
+
+        // ⚠ Ctrl+V: xterm이 이 키를 처리하지 않게(return false) 막으면, xterm 자체의
+        // "^V로 변환해서 보내기" 동작만 없어질 뿐 브라우저 네이티브 paste 동작은 그대로
+        // 살아있다. 그 네이티브 paste가 xterm 내부 textarea에 떨어지면 xterm이 자체
+        // 등록해둔 paste 리스너가 알아서 처리해준다 — 그래서 여기선 직접 개입하지 않고
+        // xterm 기본 처리에 맡긴다(우리가 클립보드를 따로 읽어와 term.paste()까지 호출하면
+        // 네이티브 paste와 겹쳐서 두 번 붙여넣기 되는 버그가 있었음).
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
+            return false;
+        }
+
+        // ⚠ Shift+방향키 (Ctrl 같이 눌렸든 아니든): GUI 텍스트 에디터의 "선택 영역
+        // 넓히기" 단축키라 xterm.js/SSH 셸에서는 지원되지 않는다. 그대로 두면 셸이
+        // 못 알아듣는 modifier 붙은 이스케이프 시퀀스(예: Shift+→ = \x1b[1;2C,
+        // Ctrl+Shift+→ = \x1b[1;6C)를 그대로 화면에 찍어버려서 "이상한 문구"로
+        // 보인다(처음엔 Ctrl+Shift 조합만 처리했는데, Shift만 눌러도 똑같이 깨져서
+        // Shift가 들어간 모든 방향키 조합으로 범위를 넓힘). cmd.exe도 이 조합에서는
+        // 그냥 커서만 움직이므로 그것과 동일하게 modifier 없는 방향키로 흘려보낸다.
+        // ⚠ preventDefault를 반드시 호출해야 한다 — 안 그러면 xterm 처리는 막히지만
+        // 브라우저 기본 동작(textarea 안에서 선택영역 넓히기)이 남아있게 되어 우리가
+        // 보낸 것과 겹쳐 이상하게 보일 수 있다.
+        const PLAIN_ARROW = { ArrowLeft: '\x1b[D', ArrowRight: '\x1b[C', ArrowUp: '\x1b[A', ArrowDown: '\x1b[B' };
+        if (e.shiftKey && PLAIN_ARROW[e.key]) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'input', data: PLAIN_ARROW[e.key] }));
+            }
+            e.preventDefault();
+            return false;
+        }
+
+        return true;
+    });
+
+    document.addEventListener('copy', (e) => {
+        if (!term.hasSelection()) return;
+        e.preventDefault();
+        e.clipboardData.setData('text/plain', term.getSelection());
+    });
+
+    // 오른쪽 클릭 = 붙여넣기 (터미널 앱에서 흔한 관례). Ctrl+V와 같은 경로를 탄다.
+    document.getElementById('terminalContainer').addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        pasteFromClipboard();
+    });
+
+    connectWebSocket();
+}
+
+function connectWebSocket() {
+    // ⚠ 이전 연결이 남아있으면 반드시 먼저 닫는다 (세션이 섞이는 버그 방지, F-6 참고)
+    if (ws) {
+        ws.onmessage = null;
+        ws.close();
+    }
+
+    ws = new WebSocket('ws://localhost:8765');
+
+    ws.onopen = () => {
+        ws.send(JSON.stringify({ type: 'init', profile: profileName }));
+        fitAddon.fit();
+        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+    };
+
+    ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'output') {
+            term.write(msg.data);
+        } else if (msg.type === 'error') {
+            term.write(`\r\n[오류] ${msg.message}\r\n`);
+            document.getElementById('reconnectBtn').style.display = 'inline-block';
+        } else if (msg.type === 'closed') {
+            term.write('\r\n[연결 끊김]\r\n');
+            document.getElementById('reconnectBtn').style.display = 'inline-block';
+        }
+    };
+
+    ws.onerror = () => {
+        document.getElementById('reconnectBtn').style.display = 'inline-block';
+    };
+}
+
+function reconnectTerminal() {
+    term.write('\r\n[재접속 중...]\r\n');
+    document.getElementById('reconnectBtn').style.display = 'none';
+    connectWebSocket();
+}
+
+async function init() {
+    profileName = await window.pywebview.api.get_profile_name();
+    document.getElementById('terminalTitle').innerText = `터미널 - ${profileName}`;
+    document.title = `터미널 - ${profileName}`;
+    initTerminal();
+}
+
+window.addEventListener('pywebviewready', init);
+</script>
+
+</body>
+</html>

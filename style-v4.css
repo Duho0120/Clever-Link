@@ -1,0 +1,402 @@
+/* V4 — V3 베이스 + 헤더를 ERP처럼 흰 배경/검은 텍스트로 전환
+   (ERP는 엣지투엣지 컬러 바가 없고, 그라데이션은 본문 안 배너 카드에만 씀 — 그 톤을 헤더에도 적용)
+   V3는 그대로 두고 이 파일만 새로 만든 것 — index.html의 href만 바꾸면 언제든 V3로 복귀 가능. */
+:root {
+  --bg: #eef1f5;
+  --panel: #ffffff;
+  --panel-hover: #f6f8fb;
+  --header-top: #1a76ad;
+  --header-bottom: #125a86;
+  --accent: #2f8fd6;
+  --accent-hover: #4aa3e0;
+  --terminal: #8b5cf6;
+  --terminal-dark: #6528d6;
+  --text: #1f2430;
+  --text-dim: #6b7280;
+  --border: #dde1e7;
+  --danger: #d9534f;
+  --success: #3ac569;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+body {
+  font-family: 'Segoe UI', 'Malgun Gothic', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;  /* body 자체는 스크롤 안 함 — #mainScroll만 스크롤 (스크롤바가 헤더에 안 걸치게) */
+}
+/* 헤더 아래 본문만 스크롤되는 영역. 헤더는 아래 .header-row에서 flex-shrink:0으로 고정 */
+#mainScroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ⚠ 폰트로 근사하는 대신, 실제 로고 이미지에서 "Clever Link" 글자만 누끼 따서 그대로 씀
+   (font-family 매칭이 정확한지 매번 확인하기 어려웠음) — 텍스트 h2는 v1~v3용으로 숨겨서 남겨둠 */
+h2 { color: var(--text); margin: 0; font-size: 16px; font-weight: 700; font-family: Georgia, 'Times New Roman', serif; line-height: 1; }
+.header-wordmark { display: none; }
+
+input { padding: 6px; border-radius: 4px; border: 1px solid var(--border); background: #fff; color: var(--text); }
+button { padding: 6px 12px; border-radius: 4px; border: none; cursor: pointer; }
+
+/* ── 상단 타이틀바 (그라데이션 헤더 = 프레임리스 창의 OS 타이틀바 대체) ───────────────────── */
+.header-row {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;  /* body가 flex column이 됐으니 헤더 높이가 눌리지 않게 고정 */
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  /* 커서만으로는 드래그 가능 영역이라는 게 안 드러나서 굳이 지정 안 함 (버튼 위에서는 자동으로 pointer) */
+}
+.header-row-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  /* ⚠ 로고(36px)/버튼 크기는 그대로 두고 위아래 여백만 줄여서 툴바 두께를 줄임 */
+  padding: 8px 12px 8px 24px;
+  user-select: none;  /* 드래그 중 텍스트가 선택되는 것 방지 */
+}
+
+/* ⚠ 네이티브 타이틀바 버튼 자리 — 창 끝까지 꽉 채워야 Fitts's law상 클릭하기 편함 */
+.window-controls {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+}
+.window-controls .win-btn {
+  width: 44px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.window-controls .win-btn svg { width: 11px; height: 11px; }
+.window-controls .win-minimize:hover,
+.window-controls .win-maximize:hover {
+  background: rgba(0,0,0,0.06);
+  color: var(--text);
+}
+.window-controls .win-close:hover {
+  background: #e81123;
+  color: #fff;
+}
+.header-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-shrink: 1;
+}
+.header-logo {
+  display: inline-flex;
+  color: #fff;
+  flex-shrink: 0;
+}
+.header-logo img { width: 36px; height: 36px; display: block; }
+.header-title-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  min-width: 0;
+  overflow: hidden;
+}
+/* ⚠ 창이 좁아지면(작은 화면/특정 배율) 버튼이 줄바꿈되며 깨지는 대신,
+   상대적으로 덜 중요한 타이틀 쪽이 말줄임표로 먼저 양보하게 함 */
+.header-title-text h2, .header-subtitle {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.header-subtitle {
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+
+.header-actions {
+  flex-shrink: 0;
+}
+.header-actions select,
+.header-actions button {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.header-actions > *:not(:last-child) {
+  position: relative;
+  margin-right: 8px;
+  padding-right: 8px;
+}
+.header-actions > *:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 16px;
+  background: rgba(0,0,0,0.12);
+}
+.header-row select {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+.header-row select option { color: #111; }
+
+/* 새로고침: 보조 액션 — 아웃라인 알약형 (ERP의 옅은 톤 보조 버튼) */
+.header-row button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-weight: 600;
+  padding: 7px 14px;
+  border-radius: 999px;
+}
+.header-row button:hover { background: var(--panel-hover); }
+
+/* + 추가: 주 액션 — 흰 헤더 위에서 포인트 컬러로 대비되는 솔리드 알약형 */
+.header-row .btn-open-add {
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #fff;
+}
+.header-row .btn-open-add:hover { background: var(--accent-hover); }
+
+/* ── 본문 여백 (body padding 대신 각 블록에 개별 부여) ───────── */
+#profileList { padding: 16px 24px 0; }
+.sheet-issue-warning, .sheet-ghost-warning, .mdns-ambiguous-warning {
+  margin: 8px 24px 0;
+  font-size: 13px;
+  padding: 8px 12px;
+  border-radius: 8px;
+}
+.sheet-issue-warning { background: #fdecec; color: #b23a3a; }
+.sheet-ghost-warning { background: #fdf1e0; color: #a35d10; }
+/* 13번/3번 기능 — mDNS 후보 여러 개(엉뚱한 장비 접속 위험) 경고: 문제 해소 전까지
+   계속 떠 있어야 하는 성격이라 sheet-issue-warning보다 눈에 띄게 진한 빨강으로 구분 */
+.mdns-ambiguous-warning {
+  background: #fbe0e0; color: #9c2b2b; border: 1px solid #e8a5a5; line-height: 1.5;
+  position: relative; padding-right: 30px;
+}
+.mdns-ambiguous-warning .amb-item { margin-top: 4px; }
+.mdns-ambiguous-warning .amb-item:first-child { margin-top: 2px; }
+.amb-close {
+  position: absolute; top: 6px; right: 8px;
+  background: transparent; border: none; cursor: pointer;
+  color: #9c2b2b; font-size: 16px; line-height: 1; padding: 2px 6px;
+}
+.amb-close:hover { color: #6e1414; }
+
+/* MAC 불일치가 해소됐을 때의 초록 확인 배너 — 빨간 경고 배너와 같은 레이아웃, 색만 초록 */
+.mac-resolved-info {
+  margin: 8px 24px 0; font-size: 13px; padding: 8px 12px; border-radius: 8px;
+  background: #e2f5e5; color: #1e7d34; border: 1px solid #a8dab0; line-height: 1.5;
+  position: relative; padding-right: 30px;
+}
+.mac-resolved-info .amb-item { margin-top: 4px; }
+.mac-resolved-info .amb-item:first-child { margin-top: 2px; }
+.mac-resolved-info .amb-close { color: #1e7d34; }
+.mac-resolved-info .amb-close:hover { color: #145522; }
+
+/* 시트-로컬 불일치 안내 — X로 안 지워지는 가운데 정렬 안내문(다음 시트 동기화 때
+   자동 해소됨). "시트 관련 안내"라 sheet-issue-warning과 같은 옅은 빨강 계열로 통일. */
+.sheet-diverged-notice {
+  margin: 8px 24px 0; font-size: 13px; padding: 10px 16px; border-radius: 8px;
+  background: #fdecec; color: #b23a3a; line-height: 1.6; text-align: center;
+}
+.sheet-diverged-notice .amb-item { margin-top: 2px; }
+#status {
+  margin: 14px 24px 20px;
+  color: #8a5a06;
+  min-height: 20px;
+  font-size: 13px;
+}
+#status:not(:empty) {
+  display: inline-block;
+  background: #fdf3e0;
+  padding: 8px 12px;
+  border-radius: 8px;
+}
+
+/* ── 원격지 행 (컬러 카드) ─────────────── */
+.profile-row {
+  display: flex;
+  flex-wrap: wrap;  /* ⚠ 창이 좁아서 다 못 들어가면, row-main을 0까지 짜부라뜨리는
+                        대신(이름/상태가 아예 안 보이는 문제 있었음, 2026-08-06) 볼륨
+                        드롭다운/버튼이 다음 줄로 넘어가도록 함 */
+  align-items: center;
+  gap: 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin-bottom: 10px;
+  box-shadow: 0 1px 3px rgba(20,30,50,0.06);
+  transition: background .15s, border-color .15s, box-shadow .15s;
+}
+.profile-row:hover {
+  background: var(--panel-hover);
+  border-color: #c7ccd4;
+  box-shadow: 0 4px 14px rgba(20,30,50,0.08);
+}
+
+/* 원격지 아이콘 칩: 디스크 모양 대신 병원(Ward) 아이콘 — 포인트 컬러 유지 */
+.row-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  background: linear-gradient(160deg, var(--accent), #1f5f92);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.row-icon svg { width: 22px; height: 22px; }
+
+.row-main { flex: 1; min-width: 140px; }
+.row-title-line { display: flex; align-items: baseline; gap: 8px; }
+.profile-name {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.row-status-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+  min-width: 0;  /* ⚠ 아래 mount-badge가 이 안에서 줄어들 수 있어야 함 */
+}
+/* ⚠ 창이 좁아져서 .row-main이 극단적으로 줄어들면(볼륨 드롭다운/버튼은 절대 안 줄어듦
+   — flex-shrink:0), 여기 텍스트에 줄바꿈 방지가 없어서 "마운트 안 됨"이 한 글자씩
+   세로로 쪼개져 보이는 문제가 있었음(실사용 중 발견, 2026-08-06). profile-name과
+   똑같이 한 줄 유지 + 말줄임표로 처리. */
+.mount-badge { min-width: 0; }
+.mount-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 마운트 상태: 점만으로는 허전해서 ERP의 상태 뱃지처럼 옅은 색 배경 알약 안에 점+텍스트를 같이 담음 */
+.mount-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.mount-badge.on { background: #e3f6ea; color: #1f7a45; }
+.mount-badge.off { background: #eef0f2; color: #5f6672; }
+.mount-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.volume-select {
+  background: #fff;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 7px 10px;
+  min-width: 170px;
+  flex-shrink: 0;
+}
+
+/* ── 액션 버튼: 원형 아이콘 → 라벨이 보이는 컬러 알약형 버튼 ─────────────── */
+.row-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.row-actions button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 38px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter .15s, transform .1s, box-shadow .15s;
+}
+.row-actions button:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+}
+.row-actions button:active { transform: translateY(0); filter: brightness(0.95); }
+
+/* 폴더 열기 — 포인트 컬러(파랑) */
+.row-actions .btn-explorer { background: linear-gradient(135deg, var(--accent), #1f5f92); }
+/* 터미널 — 보라 (폴더와 확실히 구분되는 색) */
+.row-actions .btn-terminal { background: linear-gradient(135deg, var(--terminal), var(--terminal-dark)); }
+/* 삭제 — 위험 액션은 계속 빨강 */
+.row-actions .btn-delete { background: linear-gradient(135deg, #e2585f, #ad3a3a); }
+/* 정보 수정 — 초록 (다른 버튼들과 확실히 구분되는 색) */
+.row-actions .btn-edit { background: linear-gradient(135deg, #4caf50, #2e7d32); }
+
+.btn-label { display: inline; white-space: nowrap; }
+.btn-icon { display: flex; line-height: 1; }
+.btn-icon svg { width: 16px; height: 16px; }
+
+/* ── 추가 모달 ─────────────────────────────────────────── */
+.modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); align-items: center; justify-content: center; z-index: 100; }
+.modal-backdrop.open { display: flex; }
+.modal-box {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  width: 380px;
+  padding: 24px;
+  box-shadow: 0 12px 40px rgba(20,30,50,0.2);
+}
+.modal-box h3 { margin: 0 0 16px; font-size: 17px; color: var(--text); }
+.modal-box input, .modal-box select {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  background: #fff;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 9px 10px;
+  margin: 6px 0;
+  font-size: 13px;
+}
+.modal-box input:focus, .modal-box select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.modal-actions button { border-radius: 999px; padding: 8px 18px; font-weight: 600; font-size: 13px; cursor: pointer; }
+.btn-add { background: var(--accent); color: #fff; border: 1px solid var(--accent); }
+.btn-add:hover { background: var(--accent-hover); }
+.btn-cancel { background: transparent; color: var(--text-dim); border: 1px solid var(--border); }
+.btn-cancel:hover { color: #fff; border-color: #666; }
