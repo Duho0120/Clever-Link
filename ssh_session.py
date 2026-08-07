@@ -227,7 +227,8 @@ def connect_profile(profile_name, _mac_retry=False):
         print(f"[동적 IP 재탐색] '{profile_name}' 접속 실패 - 새 IP 탐색 중...")
         new_ip = None
         if profile.get("mac"):
-            new_ip = mac_discovery.find_ip_for_mac(profile["mac"], profile["host"], resolved_port)
+            new_ip = mac_discovery.find_ip_for_mac(
+                profile["mac"], profile["host"], resolved_port, known_ips=profile.get("recent_ips"))
         if (not new_ip or new_ip == resolved_host) and profile.get("hostname"):
             # ⚠ MAC 스캔이 실패하면(ICMP 차단 등) 2차 보험으로 mDNS(호스트 이름)로
             # 한 번 더 시도한다. 호스트 이름을 아직 모르면(SSH 터미널을 한 번도 연
@@ -271,6 +272,10 @@ def connect_profile(profile_name, _mac_retry=False):
     # 문제로 배너에 떠 있었더라도 지금은 해소된 것이므로 자동으로 지운다.
     mdns_ambiguity_state.clear(profile_name)
 
+    # ⚠ 5번 개선사항 — 이 IP로 실제 접속에 성공했으니, 다음에 재탐색이 필요할 때
+    # 전체 스캔보다 먼저 시도해볼 후보로 기억해둔다.
+    profile_store.remember_recent_ip(profile_name, resolved_host)
+
     # ⚠ keepalive 설정 — 사내망 방화벽이 유휴 연결을 끊는 것 방지
     client.get_transport().set_keepalive(KEEPALIVE_SECONDS)
 
@@ -313,7 +318,8 @@ def connect_profile(profile_name, _mac_retry=False):
             if not _mac_retry:
                 recovery_attempted = True
                 print(f"[MAC 불일치 자동 복구 시도] 저장된 MAC({stored_mac})을 가진 진짜 장비를 찾는 중...")
-                correct_ip = mac_discovery.find_ip_for_mac(stored_mac, resolved_host, resolved_port)
+                correct_ip = mac_discovery.find_ip_for_mac(
+                    stored_mac, resolved_host, resolved_port, known_ips=profile.get("recent_ips"))
                 if correct_ip and correct_ip != resolved_host:
                     print(f"[MAC 불일치 자동 복구] 올바른 장비를 {correct_ip}에서 찾음 - 재접속 시도")
                     client.close()

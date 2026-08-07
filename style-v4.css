@@ -204,6 +204,14 @@ button { padding: 6px 12px; border-radius: 4px; border: none; cursor: pointer; }
 }
 .amb-close:hover { color: #6e1414; }
 
+/* 6번 개선사항 — mDNS 후보 IP 옆 원클릭 적용 버튼 */
+.amb-apply-btn {
+  margin-left: 8px; padding: 1px 8px; font-size: 12px;
+  background: #fff; color: #9c2b2b; border: 1px solid #e8a5a5; border-radius: 4px;
+  cursor: pointer;
+}
+.amb-apply-btn:hover { background: #9c2b2b; color: #fff; }
+
 /* MAC 불일치가 해소됐을 때의 초록 확인 배너 — 빨간 경고 배너와 같은 레이아웃, 색만 초록 */
 .mac-resolved-info {
   margin: 8px 24px 0; font-size: 13px; padding: 8px 12px; border-radius: 8px;

@@ -366,6 +366,36 @@ class Api:
             for name, info in mdns_ambiguity_state.get_all().items()
         ]
 
+    def apply_mdns_candidate(self, name, ip):
+        """
+        6번 개선사항 — mDNS 후보 여러 개 배너에서, 사용자가 후보 IP를 직접 "수정"
+        모달에 타이핑해서 옮겨 적지 않아도 되도록 후보 옆 [이 IP 적용] 버튼에서 바로
+        호출하는 전용 함수. update_profile()과 달리 host 하나만 가볍게 바꾼다
+        (username/비밀번호 등 나머지 필드는 그대로 — update_profile_field와 같은 이유).
+        마운트 중이었으면 update_profile()과 동일하게 새 IP로 재마운트까지 시도한다.
+        """
+        try:
+            profile_store.update_profile_field(name, host=ip)
+            mdns_ambiguity_state.clear(name)
+
+            remount = None
+            current_drive = mount_control.find_current_drive_for_profile(name)
+            if current_drive:
+                current_volume = mount_control.find_current_volume_for_profile(name) or "/"
+                try:
+                    mount_control.unmount(current_drive)
+                    mount_control.mount_profile(name, current_drive, current_volume)
+                    remount = {"ok": True, "drive": current_drive}
+                except Exception as e:
+                    remount = {"ok": False, "error": str(e)}
+
+            result = {"ok": True}
+            if remount is not None:
+                result["remount"] = remount
+            return result
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     def get_mac_mismatch_profiles(self):
         """
         13번 엣지케이스 2차 안전장치 — 저장된 기준 MAC과 실제 접속된 장비의 MAC이

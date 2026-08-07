@@ -350,6 +350,28 @@ function dismissMdnsWarning(namesWithSeq) {
     refreshMdnsWarningBanner();
 }
 
+// ⚠ 6번 개선사항 — mDNS 후보 여러 개 배너에서, "수정" 모달에 후보 IP를 직접 옮겨
+// 적지 않고 후보 옆 버튼 클릭 한 번으로 바로 반영할 수 있게 한다.
+async function applyMdnsCandidate(name, ip) {
+    setStatus(`'${name}' IP를 '${ip}'로 적용 중...`);
+    const result = await window.pywebview.api.apply_mdns_candidate(name, ip);
+    if (!result.ok) {
+        setStatus(`'${name}' IP 적용 실패: ${result.error}`);
+        return;
+    }
+    await refreshMdnsWarningBanner();
+    await loadProfiles();  // 마운트 상태 배지도 여기서 같이 갱신됨
+    if (result.remount) {
+        if (result.remount.ok) {
+            setStatus(`'${name}' IP를 '${ip}'로 적용 완료, 마운트되어 있던 드라이브(${result.remount.drive})도 새 정보로 재연결됨`);
+        } else {
+            setStatus(`'${name}' IP 적용 완료, 다만 재마운트 실패: ${result.remount.error}`);
+        }
+    } else {
+        setStatus(`'${name}' IP를 '${ip}'로 적용 완료`);
+    }
+}
+
 // ⚠ MAC 불일치 경고(13번 2차 안전장치)는 mDNS 후보 경고와 달리 재접속한다고 저절로
 // 해소되지 않는다(백엔드에서 일부러 자동으로 안 지움 — mac_mismatch_state.py 참고).
 // 그래서 X로 닫아도 "문제 해소"가 아니라 "일단 숨김"일 뿐이고, 그 뒤로도 계속 재시도해서
@@ -502,7 +524,10 @@ async function refreshMdnsWarningBanner() {
             '"수정" 버튼으로 올바른 IP를 입력해주세요.' +
             ambiguousHere.map(a =>
                 `<div class="amb-item">· <b>${a.name}</b> (호스트 이름 '${a.hostname}'):<br>` +
-                a.candidates.map(ip => `&nbsp;&nbsp;${ip}`).join('<br>') +
+                a.candidates.map(ip =>
+                    `&nbsp;&nbsp;${ip} <button class="amb-apply-btn" ` +
+                    `onclick='applyMdnsCandidate(${JSON.stringify(a.name)}, ${JSON.stringify(ip)})'>이 IP 적용</button>`
+                ).join('<br>') +
                 `</div>`
             ).join('');
     } else {

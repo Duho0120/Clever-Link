@@ -267,7 +267,8 @@ def mount_profile(profile_name, drive_letter, remote_path="/", _mac_retry=False)
         print(f"[동적 IP 재탐색] '{profile_name}' ({resolved_host}:{resolved_port}) 응답 없음 - 새 IP 탐색 중...")
         new_ip = None
         if profile.get("mac"):
-            new_ip = mac_discovery.find_ip_for_mac(profile["mac"], profile["host"], resolved_port)
+            new_ip = mac_discovery.find_ip_for_mac(
+                profile["mac"], profile["host"], resolved_port, known_ips=profile.get("recent_ips"))
         if (not new_ip or new_ip == resolved_host) and profile.get("hostname"):
             # ⚠ MAC 스캔이 실패하면(ICMP 차단 등) 2차 보험으로 mDNS(호스트 이름)로도
             # 시도해본다. 마운트 경로는 SSH 셸이 없어서 호스트 이름을 직접 캡처는
@@ -338,6 +339,10 @@ def mount_profile(profile_name, drive_letter, remote_path="/", _mac_retry=False)
     # 떠 있었더라도 지금은 해소된 것이므로 자동으로 지운다.
     mdns_ambiguity_state.clear(profile_name)
 
+    # ⚠ 5번 개선사항 — 이 IP로 실제 마운트에 성공했으니, 다음에 재탐색이 필요할 때
+    # 전체 스캔보다 먼저 시도해볼 후보로 기억해둔다.
+    profile_store.remember_recent_ip(profile_name, resolved_host)
+
     if rediscovered_sheet_host_change:
         sheet_host, new_host = rediscovered_sheet_host_change
         sheet_diverged_state.mark(profile_name, sheet_host, new_host)
@@ -376,7 +381,8 @@ def mount_profile(profile_name, drive_letter, remote_path="/", _mac_retry=False)
             if not _mac_retry:
                 recovery_attempted = True
                 print(f"[MAC 불일치 자동 복구 시도] 저장된 MAC({stored_mac})을 가진 진짜 장비를 찾는 중...")
-                correct_ip = mac_discovery.find_ip_for_mac(stored_mac, resolved_host, resolved_port)
+                correct_ip = mac_discovery.find_ip_for_mac(
+                    stored_mac, resolved_host, resolved_port, known_ips=profile.get("recent_ips"))
                 if correct_ip and correct_ip != resolved_host:
                     print(f"[MAC 불일치 자동 복구] 올바른 장비를 {correct_ip}에서 찾음 - 재마운트 시도")
                     unmount(drive_letter)

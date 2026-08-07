@@ -11,6 +11,7 @@ import keyring
 
 PROFILE_FILE = "profiles.json"
 KEYRING_SERVICE = "sftp_ssh_launcher"  # keyring에서 우리 앱을 식별하는 이름
+MAX_RECENT_IPS = 3  # 5번 개선사항 — 프로파일별로 기억해둘 최근 성공 IP 개수
 
 
 def load_profiles():
@@ -107,6 +108,7 @@ def get_profile(name):
         "source": p.get("source"),
         "mac": p.get("mac"),  # 동적 IP 재탐색용 — 접속 성공 시 자동으로 채워짐 (없으면 None)
         "hostname": p.get("hostname"),  # mDNS 재탐색용(MAC 실패 시 2차 보험) — SSH 터미널 접속 성공 시 채워짐
+        "recent_ips": p.get("recent_ips", []),  # 5번 개선사항 — 최근 성공 IP 목록(최근순), 재탐색 시 우선 확인용
     }
 
     if p["auth_type"] == "password":
@@ -154,6 +156,24 @@ def update_profile_field(name, **fields):
     if name not in profiles:
         return
     profiles[name].update(fields)
+    with open(PROFILE_FILE, "w", encoding="utf-8") as f:
+        json.dump(profiles, f, ensure_ascii=False, indent=2)
+
+
+def remember_recent_ip(name, ip):
+    """
+    5번 개선사항 — 접속/마운트가 실제로 성공한 IP를 프로파일별로 최근 것부터 최대
+    MAX_RECENT_IPS개까지 기억해둔다. 다음에 재탐색이 필요할 때 mac_discovery.
+    find_ip_for_mac()이 전체 서브넷 스캔 전에 이 IP들부터 먼저 짧게 찔러봐서, DHCP가
+    같은 대역 안에서만 재할당하는 흔한 경우엔 전체 스캔(최대 1024개 host)을 건너뛸 수
+    있게 한다. 이미 목록에 있던 IP면 맨 앞으로 옮기기만 한다(중복 저장 안 함).
+    """
+    profiles = load_profiles()
+    if name not in profiles:
+        return
+    recent = profiles[name].get("recent_ips", [])
+    recent = [ip] + [x for x in recent if x != ip]
+    profiles[name]["recent_ips"] = recent[:MAX_RECENT_IPS]
     with open(PROFILE_FILE, "w", encoding="utf-8") as f:
         json.dump(profiles, f, ensure_ascii=False, indent=2)
 

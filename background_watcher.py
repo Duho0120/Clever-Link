@@ -43,7 +43,8 @@ def _check_one_profile(name):
         print(f"[백그라운드 점검] '{name}' ({resolved_host}:{resolved_port}) 응답 없음 - 새 IP 탐색 중...")
         new_ip = None
         if profile.get("mac"):
-            new_ip = mac_discovery.find_ip_for_mac(profile["mac"], profile["host"], resolved_port)
+            new_ip = mac_discovery.find_ip_for_mac(
+                profile["mac"], profile["host"], resolved_port, known_ips=profile.get("recent_ips"))
         if (not new_ip or new_ip == resolved_host) and profile.get("hostname"):
             candidates = mdns_discovery.resolve_mdns_hostname_all(profile["hostname"])
             if len(candidates) >= 2:
@@ -69,6 +70,8 @@ def _check_one_profile(name):
         return
 
     if stored_mac == captured_mac:
+        # ⚠ 5번 개선사항 — 확인된(일치하는) IP이니 다음 재탐색을 위한 후보로 기억해둔다.
+        profile_store.remember_recent_ip(name, resolved_host)
         if name in mac_mismatch_state.get_all():
             mac_resolved_state.mark(name, captured_mac)
         mac_mismatch_state.clear(name)
@@ -78,7 +81,8 @@ def _check_one_profile(name):
     # 없으니 "차단"할 것도 없다)하기 전에, 저장된(신뢰할 수 있는) MAC을 가진 진짜 장비가
     # 로컬 대역에 있는지 한 번 더 스캔해서 있으면 조용히 자동 교정한다.
     other_owner = profile_store.find_profile_by_mac(captured_mac, exclude_name=name)
-    correct_ip = mac_discovery.find_ip_for_mac(stored_mac, resolved_host, resolved_port)
+    correct_ip = mac_discovery.find_ip_for_mac(
+        stored_mac, resolved_host, resolved_port, known_ips=profile.get("recent_ips"))
     if correct_ip and correct_ip != resolved_host:
         print(f"[백그라운드 점검] '{name}' MAC 불일치 자동 복구 - 올바른 장비를 {correct_ip}에서 찾음")
         profile_store.update_profile_field(name, host=correct_ip)
