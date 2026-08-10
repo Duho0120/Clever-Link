@@ -16,6 +16,7 @@ import re
 import socket
 import subprocess
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 PING_TIMEOUT_MS = 300
@@ -24,6 +25,11 @@ DEFAULT_PROBE_PORT = 22  # 대상 포트를 모를 때(예: 호출부가 안 넘
 SCAN_MAX_WORKERS = 40
 SCAN_MAX_HOSTS = 1024  # ⚠ 실제 대역이 너무 넓으면(/22보다 넓으면) 스캔이 너무 느려지므로 상한선
 SCAN_RETRY_COUNT = 2  # 한 번 실패해도 순간적인 타이밍/혼잡 문제일 수 있어 재시도
+# ⚠ 2026-08-10 실사용 중 발견: 장비가 막 재부팅/재연결 중이라 아주 잠깐(1차 스캔 시점에)
+# 응답을 못 하다가 몇 초 뒤엔 정상 응답하는 경우가 있었다. 재시도 사이에 간격 없이
+# 곧바로 다시 스캔하면 이런 "일시적으로 늦게 붙는" 경우를 놓치기 쉬워서, 짧게 대기했다가
+# 재시도한다. 1차 시도에서 찾으면(대부분의 경우) 이 대기는 아예 발생하지 않는다.
+SCAN_RETRY_DELAY_SECONDS = 1
 
 # ⚠ 7번 개선사항 — 백그라운드 점검(2번)이 도는 도중 사용자가 다른 프로파일을 수동
 # 접속/마운트하는 것처럼, 서로 다른 스레드에서 전체 서브넷 스캔(최대 1024호스트 ping+TCP)이
@@ -244,7 +250,9 @@ def find_ip_for_mac(mac, subnet_hint_ip, port=DEFAULT_PROBE_PORT, known_ips=None
                 network = ipaddress.ip_network(f"{ip}/{prefix or 24}", strict=False)
             except ValueError:
                 continue
-            for _ in range(SCAN_RETRY_COUNT):
+            for attempt in range(SCAN_RETRY_COUNT):
+                if attempt > 0:
+                    time.sleep(SCAN_RETRY_DELAY_SECONDS)
                 found = _scan_once(target_mac, network, port)
                 if found:
                     return found
