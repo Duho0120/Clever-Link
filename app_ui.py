@@ -577,9 +577,16 @@ if __name__ == "__main__":
                 return  # 취소 -> 트레이 아이콘도 그대로, 종료 안 함
 
         print("[종료 처리] 남은 마운트/서버 정리 중...")
-        background_watcher.stop()
-        mount_control.cleanup_all()
-        mount_control.stop_rcd()  # ⚠ 안 하면 rclone.exe가 백그라운드에 남아 exe/폴더를 계속 잠금
+        # ⚠ 2026-08-10 실사용 중 발견: rcd가 특정 요청에서 먹통이 되면(cleanup_all
+        # 내부에서도 방어하지만) 정리 절차 어딘가에서 예상 못 한 예외가 날 수 있다.
+        # 종료는 "정리가 안 되더라도" 반드시 끝까지 진행돼야 하므로, 정리 전체를
+        # 한 번 더 감싸서 무슨 일이 있어도 아래 os._exit(0)에는 도달하게 한다.
+        try:
+            background_watcher.stop()
+            mount_control.cleanup_all()
+            mount_control.stop_rcd()  # ⚠ 안 하면 rclone.exe가 백그라운드에 남아 exe/폴더를 계속 잠금
+        except Exception as e:
+            print(f"[종료 정리 중 오류 - 무시하고 종료 진행] {e}")
 
         # ⚠ window.destroy()만으로는 파이썬 프로세스(및 콘솔 창)가 안 끝나는 문제가 있었음.
         # 트레이 아이콘 스레드, WebSocket 서버 스레드 등이 데몬이라도 확실히 죽도록

@@ -481,10 +481,26 @@ def cleanup_all():
     """앱 시작/종료 시: 남아있는 모든 마운트를 정리."""
     if not is_rcd_running():
         return
-    result = _rc_call("mount/listmounts")
+
+    # ⚠ 2026-08-10 실사용 중 발견: rcd가 core/pid 같은 간단한 요청엔 응답하면서도
+    # (is_rcd_running()이 True) mount/listmounts 같은 특정 요청에서만 먹통이 되는
+    # 사례가 있었다. 이 호출이 예외 없이 그대로 위로 전파되면, 앱 완전 종료(full_quit)의
+    # 정리 절차 중간에서 죽어버려서 그 뒤의 os._exit(0)까지 도달을 못 하고, 겉에서
+    # 보기엔 "종료 버튼을 눌러도 반응이 없다"는 것처럼 보인다. 정리는 최선을 다해
+    # 시도하되, 실패해도 종료 절차 자체는 반드시 계속 진행돼야 하므로 여기서 잡는다.
+    try:
+        result = _rc_call("mount/listmounts")
+    except RuntimeError as e:
+        print(f"[정리 실패] rcd가 응답하지 않아 마운트 목록을 가져오지 못했습니다: {e}")
+        return
+
     for m in result.get("mountPoints", []):
-        print(f"[정리] 남아있던 마운트 해제: {m['MountPoint']}")
-        unmount(m["MountPoint"])
+        try:
+            print(f"[정리] 남아있던 마운트 해제: {m['MountPoint']}")
+            unmount(m["MountPoint"])
+        except RuntimeError as e:
+            print(f"[정리 실패] '{m['MountPoint']}' 해제에 실패했습니다, 다음으로 넘어갑니다: {e}")
+
     _save_mount_state({})  # 혹시 남아있을 수 있는 매핑까지 확실히 비움
 
 
