@@ -19,10 +19,18 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-PING_TIMEOUT_MS = 300
-TCP_PROBE_TIMEOUT_S = 0.3
+# ⚠ 2026-08-11 실측으로 확정한 값 — 예전엔 300ms였는데, 이게 "IP를 막 바꾼 직후에 못 찾는"
+# 문제의 진짜 원인이었다. 처음 접촉하는 IP는 ARP 해석부터 해야 해서 첫 응답이 유독 느리다
+# (같은 장비가 첫 ping 255ms -> 두 번째부터 4ms). 대역 전체의 응답 시간을 실제로 재봤더니
+# 살아있는 47개 중 6개(13%)가 300~1000ms 구간이라 300ms 타임아웃에 통째로 잘려나가고 있었다.
+# 사용자가 PowerShell에서 `-w 200`으로 훑었을 때 젯슨이 "빈 IP"로 보였던 것도 같은 이유.
+PING_TIMEOUT_MS = 1000
+TCP_PROBE_TIMEOUT_S = 1.0
 DEFAULT_PROBE_PORT = 22  # 대상 포트를 모를 때(예: 호출부가 안 넘겨줄 때)의 기본값
-SCAN_MAX_WORKERS = 40
+# ⚠ 타임아웃을 늘린 만큼 스캔이 느려지므로 병렬 수를 함께 올려서 전체 소요 시간을 비슷하게
+# 유지한다. 대부분의 시간은 응답 없는 빈 IP에서 소모된다. (ping/TCP를 각각 별도 작업으로
+# 큐에 넣으므로 실제 작업 수는 호스트 수의 2배 — _scan_once 참고)
+SCAN_MAX_WORKERS = 96
 SCAN_MAX_HOSTS = 1024  # ⚠ 실제 대역이 너무 넓으면(/22보다 넓으면) 스캔이 너무 느려지므로 상한선
 SCAN_RETRY_COUNT = 2  # 한 번 실패해도 순간적인 타이밍/혼잡 문제일 수 있어 재시도
 # ⚠ 2026-08-10 실사용 중 발견: 장비가 막 재부팅/재연결 중이라 아주 잠깐(1차 스캔 시점에)
@@ -30,6 +38,9 @@ SCAN_RETRY_COUNT = 2  # 한 번 실패해도 순간적인 타이밍/혼잡 문�
 # 곧바로 다시 스캔하면 이런 "일시적으로 늦게 붙는" 경우를 놓치기 쉬워서, 짧게 대기했다가
 # 재시도한다. 1차 시도에서 찾으면(대부분의 경우) 이 대기는 아예 발생하지 않는다.
 SCAN_RETRY_DELAY_SECONDS = 1
+# ⚠ 2026-08-11 실측 — 프로브 직후 곧바로 arp -a를 읽으면 늦게 응답한 장비가 누락된다
+# (같은 대역에서 46개 -> 3초 뒤 51개, 약 12% 차이). 짧게 기다렸다가 읽어 취합률을 올린다.
+ARP_SETTLE_DELAY_SECONDS = 3
 
 # ⚠ 7번 개선사항 — 백그라운드 점검(2번)이 도는 도중 사용자가 다른 프로파일을 수동
 # 접속/마운트하는 것처럼, 서로 다른 스레드에서 전체 서브넷 스캔(최대 1024호스트 ping+TCP)이
@@ -37,6 +48,66 @@ SCAN_RETRY_DELAY_SECONDS = 1
 # 찾고 싶다"는 요구와 안 맞아서 대신 락을 쓴다 — 스캔이 하나뿐이면 전혀 안 기다리고 바로
 # 돌아가고, 우연히 겹칠 때만 먼저 온 스캔이 끝날 때까지 순서대로 기다렸다가 시작한다.
 _scan_lock = threading.Lock()
+
+# ⚠ 2026-08-11 실사용 중 발견 — 위 락만으로는 부족했다. 백그라운드 점검이 "이 네트워크에
+# 없는 장비"를 찾느라 전체 서브넷 스캔을 10초 가까이 돌면서 락을 쥐고 있으면, 정작 사용자가
+# 직접 누른 재접속이 그만큼 기다려야 했다(실측: 4.9초 -> 14.35초). 사용자가 기다리는 스캔이
+# 있으면 백그라운드 스캔은 재시도를 포기하고 락을 빨리 놓아주도록 우선순위를 둔다.
+_priority_lock = threading.Lock()
+_user_scans_waiting = 0
+
+
+def _change_user_waiting(delta):
+    global _user_scans_waiting
+    with _priority_lock:
+        _user_scans_waiting += delta
+
+
+def _is_user_waiting():
+    with _priority_lock:
+        return _user_scans_waiting > 0
+
+
+# ⚠ _get_local_networks()는 PowerShell을 띄우는 무거운 호출이라, 프로파일마다 부르면
+# (67개) 그 자체로 수십 초가 든다. 짧게 캐싱해서 재사용한다.
+LOCAL_NETWORKS_CACHE_TTL_SECONDS = 60
+_local_networks_cache = None
+_local_networks_cache_time = 0.0
+
+
+def get_local_networks_cached():
+    global _local_networks_cache, _local_networks_cache_time
+    now = time.time()
+    if _local_networks_cache is None or now - _local_networks_cache_time > LOCAL_NETWORKS_CACHE_TTL_SECONDS:
+        _local_networks_cache = _get_local_networks()
+        _local_networks_cache_time = now
+    return _local_networks_cache
+
+
+def is_in_local_network(ip):
+    """
+    이 PC가 실제로 붙어있는 네트워크 대역 안에 있는 IP인지 판별한다.
+    ⚠ 2026-08-11 추가 — 백그라운드 점검이 다른 병원/시설 장비(이 네트워크에 있을 리 없는
+    프로파일)까지 전부 훑느라 한 사이클에 6분 넘게 걸리고, 그 과정에서 무의미한 전체 서브넷
+    스캔으로 락과 네트워크를 점유하던 문제를 막기 위함. ARP 기반 재탐색/MAC 검증은 애초에
+    같은 로컬 네트워크에서만 동작하므로, 대역이 안 맞으면 점검할 실익이 없다.
+    IP 형식이 아니면(터널 호스트 이름 등) False — 그런 원격지도 ARP로는 어차피 확인 불가.
+    """
+    if not ip:
+        return False
+    try:
+        target = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    for local_ip, prefix in get_local_networks_cached():
+        try:
+            network = ipaddress.ip_network(f"{local_ip}/{prefix or 24}", strict=False)
+        except ValueError:
+            continue
+        if target in network:
+            return True
+    return False
+
 
 # Windows `arp -a` 출력에서 "IP  MAC  타입" 줄을 찾는 패턴.
 # 예: "  192.168.123.5        11-22-33-44-55-66     dynamic"
@@ -98,6 +169,28 @@ def _tcp_probe_once(ip, port):
 def _probe_host(ip, port):
     _ping_once(ip)
     _tcp_probe_once(ip, port)
+
+
+def _is_host_alive(ip, port):
+    """
+    ⚠ 2026-08-11 추가 — ARP 캐시에 남아있는 "낡은 항목"(장비가 떠난 예전 IP)을 걸러내기 위해,
+    그 주소가 지금 실제로 응답하는지 확인한다. 포트가 열려있으면 확실히 살아있는 것이고,
+    닫혀 있을 수도 있으니 ping으로도 한 번 더 확인한다. 둘 다 실패하면 죽은 주소로 본다.
+    """
+    try:
+        with socket.create_connection((ip, port), timeout=TCP_PROBE_TIMEOUT_S):
+            return True
+    except OSError:
+        pass
+    try:
+        result = subprocess.run(
+            ["ping", "-n", "1", "-w", str(PING_TIMEOUT_MS), ip],
+            capture_output=True, timeout=2,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        return result.returncode == 0
+    except (subprocess.SubprocessError, OSError):
+        return False
 
 
 def _get_local_prefix_length(hint_ip):
@@ -169,8 +262,30 @@ def _scan_once(target_mac, network, port=DEFAULT_PROBE_PORT):
     if len(hosts) > SCAN_MAX_HOSTS:
         hosts = hosts[:SCAN_MAX_HOSTS]
 
+    # ⚠ 2026-08-11 — 예전엔 호스트마다 ping과 TCP 프로브를 "순서대로" 보냈다. 타임아웃을
+    # 1초로 올리면서 응답 없는 빈 IP 하나당 최대 2초(1초+1초)가 들어 스캔이 8초 -> 12초로
+    # 느려졌다. 둘은 서로 기다릴 이유가 없으므로 각각 독립된 작업으로 큐에 넣어 동시에
+    # 보낸다 (호스트당 최대 2초 -> 1초).
+    started = time.time()
+    tasks = [(ip, kind) for ip in hosts for kind in ("ping", "tcp")]
+
+    def run_task(task):
+        ip, kind = task
+        if kind == "ping":
+            _ping_once(ip)
+        else:
+            _tcp_probe_once(ip, port)
+
     with ThreadPoolExecutor(max_workers=SCAN_MAX_WORKERS) as pool:
-        list(pool.map(lambda ip: _probe_host(ip, port), hosts))
+        list(pool.map(run_task, tasks))
+    probe_seconds = time.time() - started
+
+    # ⚠ 2026-08-11 실측으로 발견 — 프로브가 끝나자마자 arp -a를 읽으면 "늦게 응답한" 장비가
+    # 아직 ARP 캐시에 반영되기 전이라 통째로 누락된다. 같은 대역을 반복 측정했더니 읽는
+    # 시점에 따라 46개 -> 51개로 약 12%나 차이가 났다(프로브 직후 46, 3초 뒤 51). 대상 장비가
+    # 하필 이 "늦게 응답하는" 쪽이면 멀쩡히 살아있는데도 계속 못 찾게 된다. 짧게 기다렸다가
+    # 읽어서 취합률을 올린다.
+    time.sleep(ARP_SETTLE_DELAY_SECONDS)
 
     try:
         result = subprocess.run(
@@ -180,10 +295,29 @@ def _scan_once(target_mac, network, port=DEFAULT_PROBE_PORT):
     except (subprocess.SubprocessError, OSError):
         return None
 
-    for ip_str, mac_str in _ARP_LINE.findall(result.stdout):
-        if _normalize_mac(mac_str) == target_mac:
-            return ip_str
+    entries = _ARP_LINE.findall(result.stdout)
+    matches = [ip_str for ip_str, mac_str in entries if _normalize_mac(mac_str) == target_mac]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        # ⚠ 2026-08-11 발견한 버그 — 예전엔 그냥 "첫 번째로 일치하는 IP"를 돌려줬다.
+        # 장비가 IP를 옮긴 직후엔 Windows ARP 캐시에 예전 IP의 낡은 항목이 한동안 남아있어서,
+        # 같은 MAC이 옛 IP와 새 IP 두 곳에 걸쳐 보일 수 있다. arp -a는 IP 오름차순이라 옛 IP가
+        # 먼저 나오면 죽은 주소를 돌려주게 되고, 그게 지금 저장된 host와 같으면 호출부에서
+        # "새 IP를 찾지 못함"으로 처리돼 재탐색이 통째로 실패했다. 실제로 살아있는 쪽을 고른다.
+        print(f"[스캔] 같은 MAC이 여러 IP에 보임 {matches} - 실제로 살아있는 주소를 확인합니다")
+        for ip_str in matches:
+            if _is_host_alive(ip_str, port):
+                return ip_str
+        return matches[0]  # 전부 확인 실패하면 예전 동작대로 첫 번째
 
+    # ⚠ 진단용 로그(2026-08-11) — 스캔이 실패했을 때 "우리가 실제로 무엇을 봤는지"를 남긴다.
+    # 스캔이 대역을 제대로 훑었는데도 대상 MAC이 ARP에 아예 안 잡힌 것인지(=장비가 그 순간
+    # 응답을 안 한 것), 아니면 스캔 자체가 비정상적으로 짧게 끝났거나 ARP를 못 읽은 것인지를
+    # 구분하기 위함. 실사용 중 "앱에서만 못 찾는" 현상의 원인을 좁히는 용도.
+    same_subnet = sum(1 for ip_str, _ in entries if ipaddress.ip_address(ip_str) in network)
+    print(f"[스캔 진단] 대역={network} 프로브={len(hosts)}개/{probe_seconds:.1f}초, "
+          f"ARP 응답={same_subnet}개(전체 {len(entries)}개) - 대상 MAC({target_mac}) 없음")
     return None
 
 
@@ -203,7 +337,7 @@ def _check_known_ips(target_mac, ips, port):
     return None
 
 
-def find_ip_for_mac(mac, subnet_hint_ip, port=DEFAULT_PROBE_PORT, known_ips=None):
+def find_ip_for_mac(mac, subnet_hint_ip, port=DEFAULT_PROBE_PORT, known_ips=None, background=False):
     """
     subnet_hint_ip(예전에 쓰던 IP)와 같은 네트워크 대역 전체를 훑어서, mac과
     일치하는 장비의 현재 IP를 찾아 돌려준다. 못 찾으면 None.
@@ -214,6 +348,9 @@ def find_ip_for_mac(mac, subnet_hint_ip, port=DEFAULT_PROBE_PORT, known_ips=None
     있으면 전체 스캔 전에 이것부터 먼저 확인한다 (5번 개선사항).
     ⚠ 전체 서브넷 스캔 구간은 앱 전체에서 한 번에 하나만 돌도록 락으로 감싸져 있다
     (7번 개선사항) — 다른 스캔이 겹치면 그게 끝날 때까지 대기했다가 시작한다.
+    background: 백그라운드 점검이 부른 스캔인지 (2026-08-11 추가). True면 "사용자가
+    직접 눌러서 기다리고 있는 스캔"이 생겼을 때 재시도를 포기하고 락을 빨리 놓아준다 —
+    사용자 재접속이 백그라운드 스캔 뒤에서 10초 가까이 밀리던 문제(실측) 대응.
 
     ⚠ ARP 테이블은 "최근에 통신한 상대"만 담고 있어서, 먼저 대역 전체에 핑을 돌려
     캐시를 채워야 한다. 병렬로 처리해서 몇 초 안에 끝나게 한다.
@@ -244,17 +381,28 @@ def find_ip_for_mac(mac, subnet_hint_ip, port=DEFAULT_PROBE_PORT, known_ips=None
         if not scan_targets:
             return None
 
-    with _scan_lock:
-        for ip, prefix in scan_targets:
-            try:
-                network = ipaddress.ip_network(f"{ip}/{prefix or 24}", strict=False)
-            except ValueError:
-                continue
-            for attempt in range(SCAN_RETRY_COUNT):
-                if attempt > 0:
-                    time.sleep(SCAN_RETRY_DELAY_SECONDS)
-                found = _scan_once(target_mac, network, port)
-                if found:
-                    return found
+    # ⚠ 사용자가 직접 기다리는 스캔이면, 락을 잡기 전에 먼저 "대기 중"으로 표시해둔다 —
+    # 그래야 지금 락을 쥐고 있는 백그라운드 스캔이 그걸 보고 빨리 비켜준다.
+    if not background:
+        _change_user_waiting(1)
+    try:
+        with _scan_lock:
+            for ip, prefix in scan_targets:
+                try:
+                    network = ipaddress.ip_network(f"{ip}/{prefix or 24}", strict=False)
+                except ValueError:
+                    continue
+                for attempt in range(SCAN_RETRY_COUNT):
+                    if background and attempt > 0 and _is_user_waiting():
+                        print("[스캔] 사용자 요청 스캔이 대기 중 - 백그라운드 재시도를 건너뛰고 양보합니다")
+                        return None
+                    if attempt > 0:
+                        time.sleep(SCAN_RETRY_DELAY_SECONDS)
+                    found = _scan_once(target_mac, network, port)
+                    if found:
+                        return found
+    finally:
+        if not background:
+            _change_user_waiting(-1)
 
     return None

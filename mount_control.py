@@ -29,11 +29,16 @@ import mac_mismatch_state
 import sheet_diverged_state
 import mac_resolved_state
 import ssh_session
+import ip_rediscovery_state
 
 # ⚠ 2026-08-11 실사용 중 발견(ssh_session.py와 동일한 이유) — "안 닿음"의 대부분은 IP가
 # 실제로 바뀐 게 아니라 순간적인 네트워크 끊김이다. 전체 MAC 스캔으로 넘어가기 전에
 # 짧게 대기했다가 같은 주소로 한 번 더 확인해서, 흔한 케이스에서 불필요한 스캔을 피한다.
 QUICK_RETRY_DELAY_SECONDS = 1.5
+# ⚠ 2026-08-11 실사용 중 발견 — 스캔으로 새 IP를 정확히 찾아도, 방금 재부팅/재연결된
+# 장비는 네트워크는 떴지만 SFTP 서비스는 아직 준비 안 됐을 수 있다. 이 타이밍 문제를
+# 흡수하기 위한 재시도 대기 시간 (ssh_session.py와 동일한 값 사용).
+NEW_IP_CONNECT_RETRY_DELAY_SECONDS = 3
 
 RC_ADDR = "127.0.0.1:5572"  # ⚠ "localhost"는 IPv6([::1])로 해석되어 지연/실패를 일으킨 전례가 있어 명시적 IP 사용
 RC_USER = "launcher"
@@ -275,81 +280,113 @@ def mount_profile(profile_name, drive_letter, remote_path="/", _mac_retry=False)
         time.sleep(QUICK_RETRY_DELAY_SECONDS)
         initially_unreachable = not is_reachable(resolved_host, resolved_port)
 
+    rediscovered_ip_change = None  # (old_ip, new_ip) - 노란/초록 배너용, 실제 마운트 검증 후에 확정 기록
     if initially_unreachable and (profile.get("mac") or profile.get("hostname")):
-        print(f"[동적 IP 재탐색] '{profile_name}' ({resolved_host}:{resolved_port}) 응답 없음 - 새 IP 탐색 중...")
-        new_ip = None
-        if profile.get("mac"):
-            new_ip = mac_discovery.find_ip_for_mac(
-                profile["mac"], profile["host"], resolved_port, known_ips=profile.get("recent_ips"))
-        if (not new_ip or new_ip == resolved_host) and profile.get("hostname"):
-            # ⚠ MAC 스캔이 실패하면(ICMP 차단 등) 2차 보험으로 mDNS(호스트 이름)로도
-            # 시도해본다. 마운트 경로는 SSH 셸이 없어서 호스트 이름을 직접 캡처는
-            # 못 하지만, ssh_session.py 쪽에서 이미 저장해둔 값은 여기서도 쓸 수 있다.
-            print(f"[동적 IP 재탐색] MAC으로 못 찾음 - mDNS(호스트 이름 '{profile['hostname']}')로 재시도 중...")
-            candidates = mdns_discovery.resolve_mdns_hostname_all(profile["hostname"])
-            # ⚠ ssh_session.py의 connect_profile()과 같은 이유로, 후보가 여러 개면
-            # 절대 자동으로 고르지 않고 즉시 명확한 안내와 함께 중단한다.
-            if len(candidates) >= 2:
-                candidate_list = "\n".join(f"  {ip}" for ip in candidates)
-                mdns_ambiguity_state.mark(profile_name, profile["hostname"], candidates)
-                raise RuntimeError(
-                    f"[동적 IP 재탐색] '{profile_name}'(호스트 이름 '{profile['hostname']}')에 "
-                    f"대한 mDNS 응답이 여러 개 발견되었습니다:\n{candidate_list}\n"
-                    f"같은 호스트 이름을 쓰는 다른 장비가 있을 수 있어 자동으로 선택하지 "
-                    f"않았습니다. 위 후보 IP들을 직접 확인한 뒤, 이 원격지의 정보를 "
-                    f"올바른 IP로 수정해주세요."
-                )
-            new_ip = candidates[0] if candidates else None
-        if new_ip and new_ip != resolved_host:
-            print(f"[동적 IP 재탐색] 새 IP 발견: {new_ip} (기존: {resolved_host}) - 프로파일 갱신")
-            profile_store.update_profile_field(profile_name, host=new_ip)
-            resolved_host = new_ip
-            # ⚠ 마운트가 실제로 성공해야 의미가 있으므로, 여기선 표시만 준비해두고
-            # 마운트 검증(is_mounted)까지 끝난 뒤에 실제로 기록한다 (아래 참고).
-            rediscovered_sheet_host_change = (profile["host"], new_ip) if profile.get("source") == "sheet" else None
-        else:
-            print(f"[동적 IP 재탐색] '{profile_name}' 새 IP를 찾지 못함 (같은 네트워크 대역에 없거나 오프라인)")
-            rediscovered_sheet_host_change = None
-    else:
-        rediscovered_sheet_host_change = None
+        # ⚠ 노란 배너("재탐색 중") — finally로 감싸서 성공/실패 상관없이 반드시 지워지게 한다.
+        ip_rediscovery_state.mark_in_progress(profile_name)
+        try:
+            print(f"[동적 IP 재탐색] '{profile_name}' ({resolved_host}:{resolved_port}) 응답 없음 - 새 IP 탐색 중...")
+            new_ip = None
+            if profile.get("mac"):
+                new_ip = mac_discovery.find_ip_for_mac(
+                    profile["mac"], profile["host"], resolved_port, known_ips=profile.get("recent_ips"))
+            if (not new_ip or new_ip == resolved_host) and profile.get("hostname"):
+                # ⚠ MAC 스캔이 실패하면(ICMP 차단 등) 2차 보험으로 mDNS(호스트 이름)로도
+                # 시도해본다. 마운트 경로는 SSH 셸이 없어서 호스트 이름을 직접 캡처는
+                # 못 하지만, ssh_session.py 쪽에서 이미 저장해둔 값은 여기서도 쓸 수 있다.
+                print(f"[동적 IP 재탐색] MAC으로 못 찾음 - mDNS(호스트 이름 '{profile['hostname']}')로 재시도 중...")
+                candidates = mdns_discovery.resolve_mdns_hostname_all(profile["hostname"])
+                # ⚠ ssh_session.py의 connect_profile()과 같은 이유로, 후보가 여러 개면
+                # 절대 자동으로 고르지 않고 즉시 명확한 안내와 함께 중단한다.
+                if len(candidates) >= 2:
+                    candidate_list = "\n".join(f"  {ip}" for ip in candidates)
+                    mdns_ambiguity_state.mark(profile_name, profile["hostname"], candidates)
+                    raise RuntimeError(
+                        f"[동적 IP 재탐색] '{profile_name}'(호스트 이름 '{profile['hostname']}')에 "
+                        f"대한 mDNS 응답이 여러 개 발견되었습니다:\n{candidate_list}\n"
+                        f"같은 호스트 이름을 쓰는 다른 장비가 있을 수 있어 자동으로 선택하지 "
+                        f"않았습니다. 위 후보 IP들을 직접 확인한 뒤, 이 원격지의 정보를 "
+                        f"올바른 IP로 수정해주세요."
+                    )
+                new_ip = candidates[0] if candidates else None
+            if new_ip and new_ip != resolved_host:
+                print(f"[동적 IP 재탐색] 새 IP 발견: {new_ip} (기존: {resolved_host}) - 프로파일 갱신")
+                profile_store.update_profile_field(profile_name, host=new_ip)
+                # ⚠ 마운트가 실제로 성공해야 의미가 있으므로, 여기선 표시만 준비해두고
+                # 마운트 검증(is_mounted)까지 끝난 뒤에 실제로 기록한다 (아래 참고).
+                rediscovered_ip_change = (resolved_host, new_ip)
+                resolved_host = new_ip
+            else:
+                print(f"[동적 IP 재탐색] '{profile_name}' 새 IP를 찾지 못함 (같은 네트워크 대역에 없거나 오프라인)")
+        finally:
+            ip_rediscovery_state.clear_in_progress(profile_name)
+
+    # ⚠ 여기는 원래 profile["host"](시트의 마지막 동기화 값)를 기준으로 비교해야 한다 —
+    # rediscovered_ip_change[0]은 "이번에 실제로 접속을 시도했던 주소"라 host_alt(터널)
+    # 경로에서는 profile["host"]와 다를 수 있어서 혼동하면 안 된다.
+    rediscovered_sheet_host_change = (
+        (profile["host"], rediscovered_ip_change[1])
+        if rediscovered_ip_change and profile.get("source") == "sheet" else None
+    )
 
     remote_string = _build_remote_string(profile, resolved_host, resolved_port, remote_path)
 
     print(f"[마운트 시도] '{profile_name}':{remote_path} -> {drive_letter} (대상: {resolved_host}:{resolved_port})")
-    try:
-        _rc_call("mount/mount", {
-            "fs": remote_string,
-            "mountPoint": drive_letter,
-            "vfsOpt": {
-                "CacheMode": "full",
-                "CacheMaxSize": "2G",
-                "CacheMaxAge": "24h",
-                "CachePollInterval": "1m",
-            },
-            # ⚠ 지정 안 하면 탐색기에 rclone이 즉석 연결 문자열을 해시 처리한
-            # "sftp{ZcLhz}" 같은 이름으로 표시되어, 어느 원격지를 마운트한 건지 알아보기
-            # 힘들었다 (사용자 확인 2026-07-23). rclone mount의 --volname 옵션에
-            # 해당하는 RC 파라미터가 "VolumeName"이라, 원격지 이름을 그대로 넘겨서
-            # 탐색기 드라이브 이름이 바로 알아볼 수 있게 뜨도록 한다.
-            "mountOpt": {"VolumeName": profile_name},
-        })
-    except Exception as e:
-        # ⚠ 이 예외는 requests가 로컬 rclone 서비스(127.0.0.1:5572)와 통신하다 난 것이라
-        # 원래 메시지엔 127.0.0.1:5572만 보이고, 정작 어떤 원격 기기(예: loclx.io:12226)에
-        # 접속하려 했는지는 전혀 안 나와서 헷갈렸다 (사용자 확인 2026-07-21). 실제로
-        # 접속을 시도했던 목적지 주소를 앞에 붙여서 알려준다.
-        raise RuntimeError(f"'{resolved_host}:{resolved_port}' 접속 중 실패했습니다 ({e})") from e
 
-    # ⚠ 성공 응답을 그대로 믿지 않고 재검증
-    if not is_mounted(drive_letter):
-        raise RuntimeError(
-            f"'{drive_letter}' 마운트 응답은 성공이었으나 실제로는 확인되지 않습니다. "
-            "네트워크/인증 정보를 다시 확인해주세요."
-        )
+    def _attempt_mount():
+        try:
+            _rc_call("mount/mount", {
+                "fs": remote_string,
+                "mountPoint": drive_letter,
+                "vfsOpt": {
+                    "CacheMode": "full",
+                    "CacheMaxSize": "2G",
+                    "CacheMaxAge": "24h",
+                    "CachePollInterval": "1m",
+                },
+                # ⚠ 지정 안 하면 탐색기에 rclone이 즉석 연결 문자열을 해시 처리한
+                # "sftp{ZcLhz}" 같은 이름으로 표시되어, 어느 원격지를 마운트한 건지 알아보기
+                # 힘들었다 (사용자 확인 2026-07-23). rclone mount의 --volname 옵션에
+                # 해당하는 RC 파라미터가 "VolumeName"이라, 원격지 이름을 그대로 넘겨서
+                # 탐색기 드라이브 이름이 바로 알아볼 수 있게 뜨도록 한다.
+                "mountOpt": {"VolumeName": profile_name},
+            })
+        except Exception as e:
+            # ⚠ 이 예외는 requests가 로컬 rclone 서비스(127.0.0.1:5572)와 통신하다 난 것이라
+            # 원래 메시지엔 127.0.0.1:5572만 보이고, 정작 어떤 원격 기기(예: loclx.io:12226)에
+            # 접속하려 했는지는 전혀 안 나와서 헷갈렸다 (사용자 확인 2026-07-21). 실제로
+            # 접속을 시도했던 목적지 주소를 앞에 붙여서 알려준다.
+            raise RuntimeError(f"'{resolved_host}:{resolved_port}' 접속 중 실패했습니다 ({e})") from e
+
+        # ⚠ 성공 응답을 그대로 믿지 않고 재검증
+        if not is_mounted(drive_letter):
+            raise RuntimeError(
+                f"'{drive_letter}' 마운트 응답은 성공이었으나 실제로는 확인되지 않습니다. "
+                "네트워크/인증 정보를 다시 확인해주세요."
+            )
+
+    # ⚠ 2026-08-11 실사용 중 발견(ssh_session.py와 동일한 이유) — 스캔은 네트워크
+    # 인터페이스가 살아있는지만 확인하는 거라, 방금 재탐색으로 찾은 IP는 아직 SFTP
+    # 서비스가 완전히 준비 안 됐을 수 있다. 재탐색으로 새 IP를 찾은 경우에 한해 짧게
+    # 재시도한다(평소 정상 마운트에는 영향 없음).
+    if rediscovered_ip_change:
+        try:
+            _attempt_mount()
+        except RuntimeError:
+            print(f"[마운트] 새로 찾은 IP({resolved_host}) 접속 실패 - 서비스가 아직 "
+                  f"준비 안 됐을 수 있어 재시도 중...")
+            time.sleep(NEW_IP_CONNECT_RETRY_DELAY_SECONDS)
+            _attempt_mount()
+    else:
+        _attempt_mount()
 
     # ⚠ 여기까지 왔으면 마운트에 성공한 것 — 예전에 mDNS 후보 여러 개 문제로 배너에
     # 떠 있었더라도 지금은 해소된 것이므로 자동으로 지운다.
     mdns_ambiguity_state.clear(profile_name)
+
+    # ⚠ 초록 배너("재연결 성공") — 실제로 새 IP로 마운트까지 검증된 뒤에만 기록한다.
+    if rediscovered_ip_change:
+        ip_rediscovery_state.mark_resolved(profile_name, *rediscovered_ip_change)
 
     # ⚠ 5번 개선사항 — 이 IP로 실제 마운트에 성공했으니, 다음에 재탐색이 필요할 때
     # 전체 스캔보다 먼저 시도해볼 후보로 기억해둔다.
@@ -392,15 +429,26 @@ def mount_profile(profile_name, drive_letter, remote_path="/", _mac_retry=False)
             recovery_attempted = False
             if not _mac_retry:
                 recovery_attempted = True
-                print(f"[MAC 불일치 자동 복구 시도] 저장된 MAC({stored_mac})을 가진 진짜 장비를 찾는 중...")
-                correct_ip = mac_discovery.find_ip_for_mac(
-                    stored_mac, resolved_host, resolved_port, known_ips=profile.get("recent_ips"))
-                if correct_ip and correct_ip != resolved_host:
-                    print(f"[MAC 불일치 자동 복구] 올바른 장비를 {correct_ip}에서 찾음 - 재마운트 시도")
-                    unmount(drive_letter)
-                    profile_store.update_profile_field(profile_name, host=correct_ip)
-                    return mount_profile(profile_name, drive_letter, remote_path, _mac_retry=True)
-                print("[MAC 불일치 자동 복구 실패] 로컬 대역에서 진짜 장비를 못 찾음 - 마운트 차단")
+                # ⚠ 이것도 재탐색 스캔이라 노란/초록 배너 대상이다 (ssh_session.py의
+                # connect_profile()과 같은 이유 — 2026-08-11 사용자 확인, 이 경로에
+                # 배너가 빠져 있어서 실사용 중 못 봤던 문제).
+                ip_rediscovery_state.mark_in_progress(profile_name)
+                try:
+                    print(f"[MAC 불일치 자동 복구 시도] 저장된 MAC({stored_mac})을 가진 진짜 장비를 찾는 중...")
+                    correct_ip = mac_discovery.find_ip_for_mac(
+                        stored_mac, resolved_host, resolved_port, known_ips=profile.get("recent_ips"))
+                    if correct_ip and correct_ip != resolved_host:
+                        print(f"[MAC 불일치 자동 복구] 올바른 장비를 {correct_ip}에서 찾음 - 재마운트 시도")
+                        unmount(drive_letter)
+                        profile_store.update_profile_field(profile_name, host=correct_ip)
+                        # ⚠ 재귀 호출이 실제로 성공해야 의미가 있으므로, 그게 예외 없이
+                        # 끝난 뒤에만 초록 배너를 기록한다.
+                        result = mount_profile(profile_name, drive_letter, remote_path, _mac_retry=True)
+                        ip_rediscovery_state.mark_resolved(profile_name, resolved_host, correct_ip)
+                        return result
+                    print("[MAC 불일치 자동 복구 실패] 로컬 대역에서 진짜 장비를 못 찾음 - 마운트 차단")
+                finally:
+                    ip_rediscovery_state.clear_in_progress(profile_name)
 
             # ⚠ 경고만 하고 계속 마운트된 채로 두면 엉뚱한 장비의 파일을 만질 위험이 있다 —
             # 이미 마운트는 성공해버린 뒤라(위에서 _remember_mount까지 끝남) 여기서 바로

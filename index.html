@@ -67,6 +67,8 @@
 <div id="mdnsAmbiguousWarning" class="mdns-ambiguous-warning" style="display:none;"></div>
 <div id="macMismatchWarning" class="mdns-ambiguous-warning" style="display:none;"></div>
 <div id="macResolvedInfo" class="mac-resolved-info" style="display:none;"></div>
+<div id="ipRediscoveryProgress" class="sheet-ghost-warning" style="display:none;"></div>
+<div id="ipRediscoveryResolved" class="mac-resolved-info" style="display:none;"></div>
 <div id="sheetDivergedNotice" class="sheet-diverged-notice" style="display:none;"></div>
 </div>
 
@@ -459,6 +461,60 @@ async function refreshMacResolvedBanner() {
     }
 }
 
+// ⚠ IP 재탐색 진행 상태 배너. 노란(진행 중)은 몇 초 안에 끝나는 짧은 상태라 닫기
+// 버튼 없이 그냥 상태가 사라지면 자동으로 같이 사라진다.
+async function refreshIpRediscoveryProgressBanner() {
+    const prEl = document.getElementById('ipRediscoveryProgress');
+    const inProgress = await window.pywebview.api.get_ip_rediscovery_in_progress();
+    const here = inProgress.filter(p => _currentWardProfileNames.includes(p.name));
+    if (here.length > 0) {
+        prEl.style.display = 'block';
+        prEl.innerHTML = '🔄 아래 원격지는 IP가 바뀐 것으로 보여 재탐색 중입니다...' +
+            here.map(p => `<div class="amb-item">· <b>${p.name}</b></div>`).join('');
+    } else {
+        prEl.style.display = 'none';
+        prEl.innerHTML = '';
+    }
+}
+
+// ⚠ IP 재탐색이 성공해서 재연결까지 끝난 순간의 초록 확인 배너. mac_resolved_state와
+// 같은 이유로 자동으로는 안 사라진다 — X로 닫아야 하지만, 그 후에도 다시 재탐색이
+// 발생하면(seq 증가) 다시 뜬다.
+let _dismissedIpRediscovery = new Map();
+
+function dismissIpRediscoveryResolved(namesWithSeq) {
+    for (const [name, seq] of namesWithSeq) _dismissedIpRediscovery.set(name, seq);
+    refreshIpRediscoveryResolvedBanner();
+}
+
+async function refreshIpRediscoveryResolvedBanner() {
+    const rrEl = document.getElementById('ipRediscoveryResolved');
+    const allResolved = await window.pywebview.api.get_ip_rediscovery_resolved();
+    const stillPresent = new Set(allResolved.map(r => r.name));
+    for (const name of [..._dismissedIpRediscovery.keys()]) {
+        if (!stillPresent.has(name)) _dismissedIpRediscovery.delete(name);
+    }
+
+    const resolvedHere = allResolved.filter(r =>
+        _currentWardProfileNames.includes(r.name) &&
+        _dismissedIpRediscovery.get(r.name) !== r.seq
+    );
+    if (resolvedHere.length > 0) {
+        rrEl.style.display = 'block';
+        const namesWithSeq = resolvedHere.map(r => [r.name, r.seq]);
+        rrEl.innerHTML =
+            `<button class="amb-close" title="닫기" ` +
+            `onclick='dismissIpRediscoveryResolved(${JSON.stringify(namesWithSeq)})'>&times;</button>` +
+            '✅ 아래 원격지는 IP가 바뀐 것을 감지해 자동으로 재탐색 후 재연결에 성공했습니다.' +
+            resolvedHere.map(r =>
+                `<div class="amb-item">· <b>${r.name}</b>: ${r.old_ip} → ${r.new_ip}</div>`
+            ).join('');
+    } else {
+        rrEl.style.display = 'none';
+        rrEl.innerHTML = '';
+    }
+}
+
 // 5번 기능 — profiles.json에 같은 IP(host+port)를 쓰는 원격지가 2개 이상 있으면 경고.
 // ⚠ Ward 상관없이 앱 전체 기준(같은 IP가 서로 다른 Ward에 걸쳐 겹치는 실제 사례가 있었음)
 // 이라 loadProfiles()의 Ward 필터링과 무관하게 항상 그대로 보여준다.
@@ -582,6 +638,8 @@ async function loadProfiles() {
     await refreshMdnsWarningBanner();
     await refreshMacMismatchBanner();
     await refreshMacResolvedBanner();
+    await refreshIpRediscoveryProgressBanner();
+    await refreshIpRediscoveryResolvedBanner();
     await refreshSheetDivergedNotice();
     await refreshDuplicateIpWarning();
 
@@ -642,6 +700,8 @@ async function loadVolumeOptions(name) {
     // ⚠ MAC 불일치는 "접속 성공"했을 때 감지되므로(실패가 아니라), 성공/실패 상관없이 항상 갱신
     refreshMacMismatchBanner();
     refreshMacResolvedBanner();
+    refreshIpRediscoveryProgressBanner();
+    refreshIpRediscoveryResolvedBanner();
     refreshSheetDivergedNotice();
 
     // ⚠ 이미 마운트되어 있으면, 드롭다운 기본 선택을 실제 연결된 볼륨으로 맞춘다.
@@ -666,6 +726,8 @@ async function onVolumeChange(name) {
     refreshMdnsWarningBanner();
     refreshMacMismatchBanner();
     refreshMacResolvedBanner();
+    refreshIpRediscoveryProgressBanner();
+    refreshIpRediscoveryResolvedBanner();
     refreshSheetDivergedNotice();
 }
 
@@ -703,6 +765,8 @@ async function openExplorer(name) {
         }
         refreshMacMismatchBanner();  // 마운트 성공 시점에 MAC 불일치가 감지됐을 수 있음
         refreshMacResolvedBanner();
+        refreshIpRediscoveryProgressBanner();
+        refreshIpRediscoveryResolvedBanner();
         refreshSheetDivergedNotice();
         drive = mountResult.drive;
     } else {
@@ -890,6 +954,8 @@ async function pollBanners() {
     await refreshMdnsWarningBanner();
     await refreshMacMismatchBanner();
     await refreshMacResolvedBanner();
+    await refreshIpRediscoveryProgressBanner();
+    await refreshIpRediscoveryResolvedBanner();
     await refreshSheetDivergedNotice();
     await refreshDuplicateIpWarning();
 }

@@ -27,6 +27,7 @@ import ssh_session
 import mdns_ambiguity_state
 import mac_mismatch_state
 import mac_resolved_state
+import ip_rediscovery_state
 import sheet_diverged_state
 import sheet_sync
 import tray_icon
@@ -41,7 +42,7 @@ from resource_path import resource_path, app_dir
 # 겪은 문제, 2026-08-05). 그래서 "이번에 실행 중인 코드의 버전"과 "마지막으로 실행했을 때
 # 버전"을 비교해서, 다르면(=새 버전이 배포된 것) 그때만 캐시를 지운다 — 평소 재실행에는
 # 영향 없고, 새 버전 배포 직후 첫 실행 한 번만 느려진다(~10초).
-APP_BUILD_VERSION = "15"
+APP_BUILD_VERSION = "18"
 
 
 # ── 종료 확인 팝업 전용 스레드 ──────────────────────────────
@@ -424,6 +425,23 @@ class Api:
         return [
             {"name": name, **info}
             for name, info in mac_resolved_state.get_all().items()
+        ]
+
+    def get_ip_rediscovery_in_progress(self):
+        """
+        IP 재탐색이 지금 진행 중인 원격지 목록을 노란 배너용으로 [{name}] 형태로 돌려준다.
+        보통 몇 초 안에 끝나는 짧은 상태라, 다음 폴링 때 이미 사라져 있을 수도 있다.
+        """
+        return [{"name": name} for name in ip_rediscovery_state.get_all_in_progress()]
+
+    def get_ip_rediscovery_resolved(self):
+        """
+        IP 재탐색이 성공해서 재연결까지 끝난 원격지 목록을 초록 확인 배너용으로
+        [{name, old_ip, new_ip, seq}] 형태로 돌려준다. X로 닫아야만 없어진다(자동 소멸 아님).
+        """
+        return [
+            {"name": name, **info}
+            for name, info in ip_rediscovery_state.get_all_resolved().items()
         ]
 
     def get_duplicate_ip_groups(self):
