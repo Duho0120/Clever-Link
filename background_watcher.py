@@ -13,6 +13,7 @@
 """
 
 import threading
+import time
 
 import profile_store
 import mac_discovery
@@ -23,6 +24,10 @@ import mac_resolved_state
 from host_resolver import resolve_reachable_address, is_reachable
 
 DEFAULT_INTERVAL_SECONDS = 600  # 10분
+# ⚠ 2026-08-11 실사용 중 발견(ssh_session.py/mount_control.py와 동일한 이유) — "안 닿음"의
+# 대부분은 IP가 실제로 바뀐 게 아니라 순간적인 네트워크 끊김이다. 전체 MAC 스캔으로
+# 넘어가기 전에 짧게 대기했다가 같은 주소로 한 번 더 확인한다.
+QUICK_RETRY_DELAY_SECONDS = 1.5
 
 _watch_thread = None
 _stop_event = threading.Event()
@@ -36,6 +41,10 @@ def _check_one_profile(name):
 
     resolved_host, resolved_port = resolve_reachable_address(profile)
     reachable = is_reachable(resolved_host, resolved_port)
+
+    if not reachable:
+        time.sleep(QUICK_RETRY_DELAY_SECONDS)
+        reachable = is_reachable(resolved_host, resolved_port)
 
     if not reachable and (profile.get("mac") or profile.get("hostname")):
         # ⚠ ssh_session.connect_profile()/mount_control.mount_profile()과 같은

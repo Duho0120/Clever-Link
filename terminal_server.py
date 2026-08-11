@@ -16,6 +16,7 @@
 
 import asyncio
 import json
+import socket
 import threading
 
 import websockets
@@ -25,14 +26,41 @@ import ssh_session
 WS_HOST = "localhost"
 WS_PORT = 8765
 
+# ⚠ 2026-08-11 실사용 중 발견 — channel.recv()에 타임아웃이 없어서, 연결이 끊겨도
+# OS/paramiko가 알아챌 때까지(수십 초~몇 분, 예측 불가) 무한정 대기했다. 그동안 "재접속"
+# 버튼조차 뜨지 않고 터미널이 멈춘 것처럼 보였다. 주기적으로 깨어나 연결 상태를 직접
+# 확인하도록 타임아웃을 건다. 이 값은 "사용자가 가만히 있는지"와는 무관하다 — 순수하게
+# 네트워크 상태를 확인하는 주기일 뿐이라, 짧게 잡아도 조용히 대기 중인 정상 세션을
+# 끊긴 것으로 오판하지 않는다 (아래에서 timeout만으로는 절대 끊긴 것으로 확정하지 않고
+# transport.is_active()를 반드시 같이 확인함).
+CHANNEL_HEALTH_CHECK_INTERVAL_SECONDS = 10
+# ⚠ 한 번 의심스럽다고(타임아웃 + is_active 확인 실패) 바로 "끊김"으로 확정하지 않는다 —
+# 아주 짧은(1~2초) 네트워크 흔들림일 수 있어서, 짧게 대기 후 한 번 더 확인한 뒤에만
+# 확정한다. 그래야 순간적인 blip마다 "연결 끊김" 배너가 깜빡이는 걸 막을 수 있다.
+DEAD_CONFIRM_RETRY_DELAY_SECONDS = 2
+
 
 async def _relay_channel_to_ws(channel, websocket):
     """SSH 채널의 출력을 계속 읽어서 웹소켓으로 흘려보낸다."""
     loop = asyncio.get_event_loop()
+    channel.settimeout(CHANNEL_HEALTH_CHECK_INTERVAL_SECONDS)
     try:
         while True:
-            # channel.recv는 블로킹 함수라 별도 스레드에서 실행
-            data = await loop.run_in_executor(None, channel.recv, 4096)
+            try:
+                # channel.recv는 블로킹 함수라 별도 스레드에서 실행
+                data = await loop.run_in_executor(None, channel.recv, 4096)
+            except socket.timeout:
+                # ⚠ 출력이 없었다고 바로 죽었다고 보지 않는다 — 연결(transport) 자체가
+                # 살아있으면 그냥 조용한 정상 상태이므로 계속 대기한다.
+                transport = channel.get_transport()
+                if transport is not None and transport.is_active():
+                    continue
+                # 짧게 대기 후 한 번 더 확인 — 순간적인 흔들림 봐주기
+                await asyncio.sleep(DEAD_CONFIRM_RETRY_DELAY_SECONDS)
+                transport = channel.get_transport()
+                if transport is not None and transport.is_active():
+                    continue
+                break  # 진짜 끊긴 것으로 확정
             if not data:
                 break
             # ⚠ UTF-8 명시 (한글 깨짐 방지)
@@ -52,6 +80,7 @@ async def _relay_channel_to_ws(channel, websocket):
 async def handle_client(websocket):
     client = None
     channel = None
+    relay_task = None
     try:
         # 첫 메시지는 반드시 init이어야 한다 (어떤 프로파일에 접속할지)
         init_raw = await websocket.recv()
@@ -83,13 +112,16 @@ async def handle_client(websocket):
             msg = json.loads(message)
 
             if msg["type"] == "input":
-                channel.send(msg["data"].encode("utf-8"))
+                # ⚠ channel.send()도 블로킹 함수라, 연결이 끊긴 상태에서는 (settimeout으로
+                # 건) 타임아웃까지 멈출 수 있다. 별도 스레드에서 실행해서 asyncio 이벤트
+                # 루프(다른 클라이언트 포함) 전체가 같이 멈추지 않게 한다. await로 순서대로
+                # 처리해서 — 다음 메시지를 읽기 전에 이번 전송이 끝나길 기다려서 — 빠르게
+                # 연타하거나 붙여넣기해도 입력 순서가 꼬이지 않게 한다.
+                await loop.run_in_executor(None, channel.send, msg["data"].encode("utf-8"))
 
             elif msg["type"] == "resize":
                 # ⚠ 창 크기 동기화 — 없으면 vim/htop 화면이 깨짐
                 channel.resize_pty(width=msg["cols"], height=msg["rows"])
-
-        relay_task.cancel()
 
     except Exception as e:
         print(f"[터미널 오류] {e}")
@@ -98,6 +130,11 @@ async def handle_client(websocket):
         except Exception:
             pass
     finally:
+        # ⚠ 정상 종료든 예외든 relay_task가 계속 살아서 이미 닫힌 channel/client를 붙잡고
+        # 있지 않도록 항상 취소한다 (예전엔 정상 종료 경로에서만 cancel()을 불러서, 예외로
+        # 빠지는 경우 relay_task가 정리 안 된 채 남을 수 있었다).
+        if relay_task:
+            relay_task.cancel()
         if channel:
             channel.close()
         if client:

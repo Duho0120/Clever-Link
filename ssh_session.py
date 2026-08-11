@@ -12,6 +12,7 @@ import hashlib
 import os
 import re
 import socket
+import time
 
 import paramiko
 
@@ -26,13 +27,21 @@ import mac_resolved_state
 import sheet_diverged_state
 
 KNOWN_HOSTS_FILE = "known_hosts_launcher"  # 우리 앱 전용 known_hosts 파일
-KEEPALIVE_SECONDS = 30
+# ⚠ 2026-08-11 실사용 중 발견 — 30초는 죽은 연결을 알아채기엔 너무 길었다(터미널
+# 재접속 버튼이 뜨는 데 오래 걸리는 원인 중 하나). terminal_server.py의 채널 상태
+# 확인 주기(10초)와 맞춰서 더 빨리 감지되도록 단축.
+KEEPALIVE_SECONDS = 10
 # ⚠ 2026-08-10 실사용 중 발견: IP가 바뀌어 예전 주소가 완전히 죽어있으면(패킷이 조용히
 # 버려지는 경우), 타임아웃 없이 client.connect()를 부르면 OS 기본 TCP 연결 타임아웃
 # (윈도우 기준 수십 초 이상)까지 그냥 멈춰있는다. 동적 IP 재탐색 로직(아래 connect_profile)은
 # socket.timeout을 잡아서 발동하는 구조인데, 타임아웃 자체가 없으면 그 예외가 안 나서
 # 재탐색도 안 걸리고 경고 문구도 안 뜨는 채로 무한정 멈춘 것처럼 보인다.
 CONNECT_TIMEOUT_SECONDS = 5
+# ⚠ 2026-08-11 실사용 중 발견: 현장에서 "연결 끊김"의 대부분은 IP가 실제로 바뀐 게
+# 아니라 Wi-Fi 순간 끊김 같은 일시적 문제였다. 곧바로 전체 MAC 스캔으로 넘어가면 이런
+# 흔한 케이스에서도 매번 불필요하게 오래 걸려서, 재탐색 전에 짧게 대기했다가 같은
+# 주소로 한 번 더 가볍게 시도해본다 (connect_profile 참고).
+QUICK_RETRY_DELAY_SECONDS = 1.5
 
 # ── 확인창 함수 등록 자리 ──────────────────────────────
 # app_ui.py가 시작할 때 set_confirm_callback(ask_confirm)으로 등록해둔다.
@@ -65,12 +74,17 @@ class InteractiveHostKeyPolicy(paramiko.MissingHostKeyPolicy):
     """
 
     def missing_host_key(self, client, hostname, key):
+        # ⚠ 2026-08-11 사용자 요청 — 문구가 너무 길어서 현장에서 바로 읽고 판단하기
+        # 어려웠다(특히 앱 창을 안 띄워두고 쓰는 경우, 팝업만 보고 즉시 판단해야 함).
+        # known_hosts는 IP(hostname 인자) 기준으로 키를 저장하므로, 이 정책은 "정말
+        # 처음 보는 서버"뿐 아니라 "연결 중이던 기기의 IP가 재할당됨"(동적 재탐색으로
+        # 새 IP를 찾은 경우)에도 똑같이 걸린다 — 그래서 문구도 두 경우를 함께 아우르게 했다.
         fp = _fingerprint_sha256(key)
         message = (
-            f"처음 접속하는 서버입니다: {hostname}\n\n"
-            f"지문(fingerprint): {fp}\n\n"
-            f"이 지문이 서버 관리자가 알려준 것과 일치하는지 확인하세요.\n"
-            f"신뢰하고 계속 접속하시겠습니까?"
+            f"처음 접속하는 서버이거나, 연결 중이던 기기의 IP가 변경된 것으로 보입니다.\n"
+            f"({hostname}) 재접속 시도할까요?\n"
+            f"(보안 공격이 의심되어 신뢰하기 어려운 경우라면 취소를 누르세요.)\n\n"
+            f"지문: {fp}"
         )
 
         if _confirm_callback is not None:
@@ -120,17 +134,17 @@ def _handle_changed_host_key(exc):
     지문이 달라지는 건 IP 재할당 같은 정상적인 상황일 수도 있지만, 중간자 공격일
     수도 있어서 자동으로 덮어쓰지 않고 반드시 사용자 승인을 받는다.
     """
+    # ⚠ 2026-08-11 사용자 요청 — 문구 단축(missing_host_key와 같은 이유). 이 경우는 같은
+    # 주소(hostname)에 예전과 다른 장비가 자리잡았을 가능성이 높은 상황이라, 보안 용어
+    # 대신 "다른 기기가 사용 중"이라는 실제 상황 그대로 표현하고, 취소 안내는 Case 1과
+    # 동일한 짧은 문구로 통일한다.
     hostname = exc.hostname
     old_fp = _fingerprint_sha256(exc.expected_key)
     new_fp = _fingerprint_sha256(exc.key)
     message = (
-        f"'{hostname}' 서버의 지문(fingerprint)이 이전에 저장된 것과 다릅니다.\n\n"
-        f"이전 지문: {old_fp}\n"
-        f"새 지문: {new_fp}\n\n"
-        f"서버 IP가 다른 장비로 재할당됐거나 서버를 새로 설치한 경우 정상적인 변화일 "
-        f"수 있지만, 다른 서버로 연결되고 있는(중간자 공격 등) 상황일 수도 있습니다.\n"
-        f"서버 관리자에게 확인한 지문과 일치하는 경우에만 신뢰하세요.\n\n"
-        f"신뢰하고 새 지문으로 갱신한 뒤 계속 접속하시겠습니까?"
+        f"'{hostname}' 주소를 지금 다른 기기가 사용 중인 것 같습니다. 재접속 시도할까요?\n"
+        f"(보안 공격이 의심되어 신뢰하기 어려운 경우라면 취소를 누르세요.)\n\n"
+        f"이전 지문: {old_fp}\n새 지문: {new_fp}"
     )
 
     if _confirm_callback is not None:
@@ -157,6 +171,26 @@ def _handle_changed_host_key(exc):
     print(f"[갱신 완료] '{hostname}'의 새 지문을 저장했습니다.\n")
 
 
+AUTH_TRANSPORT_RETRY_COUNT = 2  # "진짜 인증 실패"가 아니라 연결이 도중에 끊긴 경우에만 재시도
+AUTH_TRANSPORT_RETRY_DELAY_SECONDS = 2
+
+
+def _is_transient_transport_failure(exc):
+    """
+    ⚠ 2026-08-11 실사용 중 발견: paramiko는 인증 응답을 기다리는 도중 연결(transport)
+    자체가 끊기면(상대 장비의 sshd가 아직 준비되지 않았거나, 순간적인 연결 끊김 등)
+    비밀번호가 틀린 것과 똑같은 paramiko.AuthenticationException을 던진다
+    ("Authentication failed: transport shut down or saw EOF" — paramiko/auth_handler.py의
+    wait_for_response에서, transport.is_active()가 False가 되고 별도 저장된 예외가
+    없거나 EOFError 계열일 때 이 메시지로 던져짐). 진짜 자격증명 문제(순수
+    "Authentication failed.")와 달리 이건 잠깐 뒤에 재시도하면 성공할 가능성이 높아서
+    구분해서 처리한다 — IP가 막 재할당된 직후처럼 원격지가 아직 완전히 준비되지 않은
+    상황에서 특히 자주 재현됨(실사용 중 확인).
+    """
+    message = str(exc)
+    return "transport shut down" in message or "saw EOF" in message
+
+
 def _connect(connect_kwargs):
     """BadHostKeyException(지문 변경)이 나면 사용자 승인받아 자동 재시도까지 포함해서 접속."""
     # ⚠ 호출부(connect_profile/open_connection)가 명시적으로 넘긴 값이 있으면 그걸 우선한다 —
@@ -167,15 +201,26 @@ def _connect(connect_kwargs):
         "auth_timeout": CONNECT_TIMEOUT_SECONDS,
         **connect_kwargs,
     }
-    client = _new_client()
-    try:
-        client.connect(**connect_kwargs)
-    except paramiko.BadHostKeyException as e:
-        client.close()
-        _handle_changed_host_key(e)  # 승인 안 하면 여기서 예외를 던지고 끝남
-        client = _new_client()  # 갱신된 known_hosts로 새로 만들어서 재시도
-        client.connect(**connect_kwargs)
-    return client
+
+    def _connect_once():
+        client = _new_client()
+        try:
+            client.connect(**connect_kwargs)
+        except paramiko.BadHostKeyException as e:
+            client.close()
+            _handle_changed_host_key(e)  # 승인 안 하면 여기서 예외를 던지고 끝남
+            client = _new_client()  # 갱신된 known_hosts로 새로 만들어서 재시도
+            client.connect(**connect_kwargs)
+        return client
+
+    for attempt in range(AUTH_TRANSPORT_RETRY_COUNT + 1):
+        try:
+            return _connect_once()
+        except paramiko.AuthenticationException as e:
+            if attempt >= AUTH_TRANSPORT_RETRY_COUNT or not _is_transient_transport_failure(e):
+                raise  # 진짜 인증 실패(비번 틀림 등)는 재시도하지 말고 그대로 전파
+            print(f"[SSH 인증 중 연결 끊김 - 재시도 {attempt + 1}/{AUTH_TRANSPORT_RETRY_COUNT}] {e}")
+            time.sleep(AUTH_TRANSPORT_RETRY_DELAY_SECONDS)
 
 
 def open_connection(profile, resolved_host, resolved_port):
@@ -226,61 +271,73 @@ def connect_profile(profile_name, _mac_retry=False):
     try:
         client = _connect(connect_kwargs)
     except (socket.timeout, OSError):
-        # ⚠ 동적 IP 재탐색: 접속 자체가 안 되는(호스트 unreachable) 경우에만 시도한다.
-        # 비밀번호 오류 등은 paramiko.AuthenticationException이라 여기 안 걸림 — 그런
-        # 경우까지 IP를 바꾸려 들면 안 되므로 의도적으로 socket/OSError만 잡는다.
-        # ⚠ source(수동/시트) 상관없이, MAC이나 호스트 이름을 알고 있으면 무조건 시도한다
-        # (시트=고정 IP라는 가정이 항상 맞지는 않을 수 있어서, 알고 있는 정보가 있으면
-        # 그냥 써보자는 방향으로 변경함 — 사용자 확인 2026-08-05). 둘 다 모르면
-        # (한 번도 성공 접속한 적 없으면) 애초에 찾을 방법이 없다.
-        if not (profile.get("mac") or profile.get("hostname")):
-            raise
-        # ⚠ print()에 "—"(em dash) 같은 특수문자를 쓰면 콘솔 인코딩이 UTF-8이 아닐 때
-        # (Windows 기본 cp949 등) UnicodeEncodeError로 여기서 그대로 죽어버린다 — 실제로
-        # 테스트하다 겪은 버그. 안전하게 일반 하이픈만 사용한다.
-        print(f"[동적 IP 재탐색] '{profile_name}' 접속 실패 - 새 IP 탐색 중...")
-        new_ip = None
-        if profile.get("mac"):
-            new_ip = mac_discovery.find_ip_for_mac(
-                profile["mac"], profile["host"], resolved_port, known_ips=profile.get("recent_ips"))
-        if (not new_ip or new_ip == resolved_host) and profile.get("hostname"):
-            # ⚠ MAC 스캔이 실패하면(ICMP 차단 등) 2차 보험으로 mDNS(호스트 이름)로
-            # 한 번 더 시도한다. 호스트 이름을 아직 모르면(SSH 터미널을 한 번도 연
-            # 적이 없으면) 애초에 시도할 게 없다.
-            print(f"[동적 IP 재탐색] MAC으로 못 찾음 - mDNS(호스트 이름 '{profile['hostname']}')로 재시도 중...")
-            candidates = mdns_discovery.resolve_mdns_hostname_all(profile["hostname"])
-            # ⚠ 다른 장비가 같은 호스트 이름을 쓰고 있으면 응답이 여러 개 올 수 있다.
-            # 이럴 때 아무거나 하나를 골라 조용히 연결해버리면 엉뚱한 장비에 접속될
-            # 위험이 있으므로, 절대 자동으로 고르지 않고 사용자에게 후보를 그대로
-            # 보여주고 재탐색을 중단한다 (사용자가 직접 확인 후 수정하도록 유도).
-            if len(candidates) >= 2:
-                candidate_list = "\n".join(f"  {ip}" for ip in candidates)
-                # ⚠ 상태줄(setStatus)은 뒤이은 다른 작업 메시지에 바로 덮어써져서 놓치기
-                # 쉽다 — 메인 창에 계속 떠 있는 경고 배너로도 보여주기 위해 별도 기록.
-                mdns_ambiguity_state.mark(profile_name, profile["hostname"], candidates)
-                raise RuntimeError(
-                    f"[동적 IP 재탐색] '{profile_name}'(호스트 이름 '{profile['hostname']}')에 "
-                    f"대한 mDNS 응답이 여러 개 발견되었습니다:\n{candidate_list}\n"
-                    f"같은 호스트 이름을 쓰는 다른 장비가 있을 수 있어 자동으로 선택하지 "
-                    f"않았습니다. 위 후보 IP들을 직접 확인한 뒤, 이 원격지의 정보를 "
-                    f"올바른 IP로 수정해주세요."
-                )
-            new_ip = candidates[0] if candidates else None
-        if not new_ip or new_ip == resolved_host:
-            print(f"[동적 IP 재탐색] '{profile_name}' 새 IP를 찾지 못함 (같은 네트워크 대역에 없거나 오프라인)")
-            raise
-        print(f"[동적 IP 재탐색] 새 IP 발견: {new_ip} (기존: {resolved_host}) - 프로파일 갱신 후 재접속")
-        profile_store.update_profile_field(profile_name, host=new_ip)
-        resolved_host = new_ip
-        connect_kwargs["hostname"] = new_ip
-        client = _connect(connect_kwargs)
-        # ⚠ 여기까지 예외 없이 왔으면 새 IP로 재접속까지 성공한 것. 시트에서 온
-        # 프로파일이면(source="sheet") 방금 우리가 로컬에서 바꾼 host가 시트의 마지막
-        # 동기화 값(profile["host"], 아직 갱신 전 원래 값)과 달라졌다는 뜻이므로 표시해둔다
-        # — 시트는 앱이 자동으로 안 건드리기로 했으니(사용자 확인 2026-08-05), 다음 시트
-        # 새로고침 때 이 로컬 교정이 되돌려질 수 있다는 걸 알려주기 위함.
-        if profile.get("source") == "sheet":
-            sheet_diverged_state.mark(profile_name, profile["host"], new_ip)
+        # ⚠ 2026-08-11 실사용 중 발견: 현장에서 "연결이 끊겼다"의 대부분은 IP가 실제로
+        # 바뀐 게 아니라 Wi-Fi 순간 끊김 같은 일시적 문제였다. 그런데 곧바로 전체 MAC
+        # 스캔(몇 초 이상)으로 넘어가면, 흔한 케이스(같은 주소로 금방 다시 됨)에서도
+        # 매번 불필요하게 오래 걸렸다. MAC 재탐색으로 가기 전에, 짧게 대기했다가 같은
+        # 주소로 한 번 더 가볍게 시도해서 빠르게 복구되는지부터 확인한다.
+        print(f"[재접속] '{profile_name}' 같은 주소로 짧게 재시도 중 (순간적인 끊김일 수 있음)...")
+        time.sleep(QUICK_RETRY_DELAY_SECONDS)
+        try:
+            client = _connect(connect_kwargs)
+            print(f"[재접속] '{profile_name}' 같은 주소로 재시도 성공 - IP 재탐색 불필요")
+        except (socket.timeout, OSError):
+            # ⚠ 진짜 안 닿는 상태 - 기존 동적 IP 재탐색으로 진행 (아래 로직 전부 그대로)
+            # ⚠ 동적 IP 재탐색: 접속 자체가 안 되는(호스트 unreachable) 경우에만 시도한다.
+            # 비밀번호 오류 등은 paramiko.AuthenticationException이라 여기 안 걸림 — 그런
+            # 경우까지 IP를 바꾸려 들면 안 되므로 의도적으로 socket/OSError만 잡는다.
+            # ⚠ source(수동/시트) 상관없이, MAC이나 호스트 이름을 알고 있으면 무조건 시도한다
+            # (시트=고정 IP라는 가정이 항상 맞지는 않을 수 있어서, 알고 있는 정보가 있으면
+            # 그냥 써보자는 방향으로 변경함 — 사용자 확인 2026-08-05). 둘 다 모르면
+            # (한 번도 성공 접속한 적 없으면) 애초에 찾을 방법이 없다.
+            if not (profile.get("mac") or profile.get("hostname")):
+                raise
+            # ⚠ print()에 "—"(em dash) 같은 특수문자를 쓰면 콘솔 인코딩이 UTF-8이 아닐 때
+            # (Windows 기본 cp949 등) UnicodeEncodeError로 여기서 그대로 죽어버린다 — 실제로
+            # 테스트하다 겪은 버그. 안전하게 일반 하이픈만 사용한다.
+            print(f"[동적 IP 재탐색] '{profile_name}' 접속 실패 - 새 IP 탐색 중...")
+            new_ip = None
+            if profile.get("mac"):
+                new_ip = mac_discovery.find_ip_for_mac(
+                    profile["mac"], profile["host"], resolved_port, known_ips=profile.get("recent_ips"))
+            if (not new_ip or new_ip == resolved_host) and profile.get("hostname"):
+                # ⚠ MAC 스캔이 실패하면(ICMP 차단 등) 2차 보험으로 mDNS(호스트 이름)로
+                # 한 번 더 시도한다. 호스트 이름을 아직 모르면(SSH 터미널을 한 번도 연
+                # 적이 없으면) 애초에 시도할 게 없다.
+                print(f"[동적 IP 재탐색] MAC으로 못 찾음 - mDNS(호스트 이름 '{profile['hostname']}')로 재시도 중...")
+                candidates = mdns_discovery.resolve_mdns_hostname_all(profile["hostname"])
+                # ⚠ 다른 장비가 같은 호스트 이름을 쓰고 있으면 응답이 여러 개 올 수 있다.
+                # 이럴 때 아무거나 하나를 골라 조용히 연결해버리면 엉뚱한 장비에 접속될
+                # 위험이 있으므로, 절대 자동으로 고르지 않고 사용자에게 후보를 그대로
+                # 보여주고 재탐색을 중단한다 (사용자가 직접 확인 후 수정하도록 유도).
+                if len(candidates) >= 2:
+                    candidate_list = "\n".join(f"  {ip}" for ip in candidates)
+                    # ⚠ 상태줄(setStatus)은 뒤이은 다른 작업 메시지에 바로 덮어써져서 놓치기
+                    # 쉽다 — 메인 창에 계속 떠 있는 경고 배너로도 보여주기 위해 별도 기록.
+                    mdns_ambiguity_state.mark(profile_name, profile["hostname"], candidates)
+                    raise RuntimeError(
+                        f"[동적 IP 재탐색] '{profile_name}'(호스트 이름 '{profile['hostname']}')에 "
+                        f"대한 mDNS 응답이 여러 개 발견되었습니다:\n{candidate_list}\n"
+                        f"같은 호스트 이름을 쓰는 다른 장비가 있을 수 있어 자동으로 선택하지 "
+                        f"않았습니다. 위 후보 IP들을 직접 확인한 뒤, 이 원격지의 정보를 "
+                        f"올바른 IP로 수정해주세요."
+                    )
+                new_ip = candidates[0] if candidates else None
+            if not new_ip or new_ip == resolved_host:
+                print(f"[동적 IP 재탐색] '{profile_name}' 새 IP를 찾지 못함 (같은 네트워크 대역에 없거나 오프라인)")
+                raise
+            print(f"[동적 IP 재탐색] 새 IP 발견: {new_ip} (기존: {resolved_host}) - 프로파일 갱신 후 재접속")
+            profile_store.update_profile_field(profile_name, host=new_ip)
+            resolved_host = new_ip
+            connect_kwargs["hostname"] = new_ip
+            client = _connect(connect_kwargs)
+            # ⚠ 여기까지 예외 없이 왔으면 새 IP로 재접속까지 성공한 것. 시트에서 온
+            # 프로파일이면(source="sheet") 방금 우리가 로컬에서 바꾼 host가 시트의 마지막
+            # 동기화 값(profile["host"], 아직 갱신 전 원래 값)과 달라졌다는 뜻이므로 표시해둔다
+            # — 시트는 앱이 자동으로 안 건드리기로 했으니(사용자 확인 2026-08-05), 다음 시트
+            # 새로고침 때 이 로컬 교정이 되돌려질 수 있다는 걸 알려주기 위함.
+            if profile.get("source") == "sheet":
+                sheet_diverged_state.mark(profile_name, profile["host"], new_ip)
 
     # ⚠ 여기까지 왔으면 접속에 성공한 것 — 예전에 이 프로파일이 mDNS 후보 여러 개
     # 문제로 배너에 떠 있었더라도 지금은 해소된 것이므로 자동으로 지운다.

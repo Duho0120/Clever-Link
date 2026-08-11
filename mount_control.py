@@ -30,6 +30,11 @@ import sheet_diverged_state
 import mac_resolved_state
 import ssh_session
 
+# ⚠ 2026-08-11 실사용 중 발견(ssh_session.py와 동일한 이유) — "안 닿음"의 대부분은 IP가
+# 실제로 바뀐 게 아니라 순간적인 네트워크 끊김이다. 전체 MAC 스캔으로 넘어가기 전에
+# 짧게 대기했다가 같은 주소로 한 번 더 확인해서, 흔한 케이스에서 불필요한 스캔을 피한다.
+QUICK_RETRY_DELAY_SECONDS = 1.5
+
 RC_ADDR = "127.0.0.1:5572"  # ⚠ "localhost"는 IPv6([::1])로 해석되어 지연/실패를 일으킨 전례가 있어 명시적 IP 사용
 RC_USER = "launcher"
 RC_PASS = "launcher_local_only"  # localhost 전용이라 단순 고정값으로 충분
@@ -262,8 +267,15 @@ def mount_profile(profile_name, drive_letter, remote_path="/", _mac_retry=False)
     # 원인을 확실하게 구분한다 (ssh_session.py의 connect_profile()과 같은 이유/패턴).
     # ⚠ source(수동/시트) 상관없이, MAC이나 호스트 이름을 알고 있으면 시도한다
     # (사용자 확인 2026-08-05 — ssh_session.py와 동일하게 범위 확장).
-    if (not is_reachable(resolved_host, resolved_port)
-            and (profile.get("mac") or profile.get("hostname"))):
+    initially_unreachable = not is_reachable(resolved_host, resolved_port)
+    if initially_unreachable:
+        # ⚠ 2026-08-11 실사용 중 발견(ssh_session.connect_profile과 동일한 이유) — 대부분의
+        # "안 닿음"은 IP가 실제로 바뀐 게 아니라 순간적인 네트워크 끊김이다. 곧바로 전체
+        # MAC 스캔으로 넘어가기 전에, 짧게 대기했다가 같은 주소로 한 번 더 확인한다.
+        time.sleep(QUICK_RETRY_DELAY_SECONDS)
+        initially_unreachable = not is_reachable(resolved_host, resolved_port)
+
+    if initially_unreachable and (profile.get("mac") or profile.get("hostname")):
         print(f"[동적 IP 재탐색] '{profile_name}' ({resolved_host}:{resolved_port}) 응답 없음 - 새 IP 탐색 중...")
         new_ip = None
         if profile.get("mac"):
