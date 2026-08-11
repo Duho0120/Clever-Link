@@ -69,7 +69,16 @@ def _tk_worker():
     def poll():
         try:
             title, message = _question_queue.get_nowait()
+            # ⚠ 2026-08-10 실사용 중 발견: IP가 바뀌면 known_hosts에 없는 "처음 보는
+            # 서버"로 인식돼서 이 확인창이 뜨는데, root가 withdraw()로 숨겨진 창이라
+            # 다른 창(특히 메인 pywebview 창) 뒤에 가려진 채로 떠서 사용자가 못 보고
+            # "앱이 멈췄다"고 오해하는 문제가 있었다. 잠깐 최상단(topmost)으로 띄워서
+            # 반드시 눈에 띄게 한 뒤, 응답을 받으면 원래대로 되돌린다.
+            root.attributes("-topmost", True)
+            root.lift()
+            root.focus_force()
             answer = messagebox.askyesno(title, message, parent=root)
+            root.attributes("-topmost", False)
             _answer_queue.put(answer)
         except queue.Empty:
             pass

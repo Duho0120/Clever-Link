@@ -27,6 +27,12 @@ import sheet_diverged_state
 
 KNOWN_HOSTS_FILE = "known_hosts_launcher"  # 우리 앱 전용 known_hosts 파일
 KEEPALIVE_SECONDS = 30
+# ⚠ 2026-08-10 실사용 중 발견: IP가 바뀌어 예전 주소가 완전히 죽어있으면(패킷이 조용히
+# 버려지는 경우), 타임아웃 없이 client.connect()를 부르면 OS 기본 TCP 연결 타임아웃
+# (윈도우 기준 수십 초 이상)까지 그냥 멈춰있는다. 동적 IP 재탐색 로직(아래 connect_profile)은
+# socket.timeout을 잡아서 발동하는 구조인데, 타임아웃 자체가 없으면 그 예외가 안 나서
+# 재탐색도 안 걸리고 경고 문구도 안 뜨는 채로 무한정 멈춘 것처럼 보인다.
+CONNECT_TIMEOUT_SECONDS = 5
 
 # ── 확인창 함수 등록 자리 ──────────────────────────────
 # app_ui.py가 시작할 때 set_confirm_callback(ask_confirm)으로 등록해둔다.
@@ -153,6 +159,14 @@ def _handle_changed_host_key(exc):
 
 def _connect(connect_kwargs):
     """BadHostKeyException(지문 변경)이 나면 사용자 승인받아 자동 재시도까지 포함해서 접속."""
+    # ⚠ 호출부(connect_profile/open_connection)가 명시적으로 넘긴 값이 있으면 그걸 우선한다 —
+    # 기본값은 여기 한 곳에서만 채워서 모든 접속 경로가 빠짐없이 타임아웃을 갖게 한다.
+    connect_kwargs = {
+        "timeout": CONNECT_TIMEOUT_SECONDS,
+        "banner_timeout": CONNECT_TIMEOUT_SECONDS,
+        "auth_timeout": CONNECT_TIMEOUT_SECONDS,
+        **connect_kwargs,
+    }
     client = _new_client()
     try:
         client.connect(**connect_kwargs)

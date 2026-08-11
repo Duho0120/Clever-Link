@@ -66,7 +66,13 @@ async def handle_client(websocket):
         profile_name = init_msg["profile"]
         print(f"[터미널 연결] 프로파일: {profile_name}")
 
-        client = ssh_session.connect_profile(profile_name)
+        # ⚠ connect_profile()은 블로킹 함수(paramiko 소켓 연결 + 동적 IP 재탐색 스캔까지
+        # 포함하면 최대 수십 초)라, asyncio 이벤트 루프 스레드에서 그대로 부르면 이 접속
+        # 하나가 오래 걸릴 때 서버 전체(다른 클라이언트의 웹소켓 메시지 처리까지)가 같이
+        # 멈춰버린다 (2026-08-10 실사용 중 발견). 별도 스레드에서 돌려서 이벤트 루프는
+        # 계속 살아있게 한다.
+        loop = asyncio.get_event_loop()
+        client = await loop.run_in_executor(None, ssh_session.connect_profile, profile_name)
         channel = ssh_session.open_terminal_channel(client)
 
         # 출력 중계를 백그라운드 작업으로 시작
