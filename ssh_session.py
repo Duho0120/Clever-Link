@@ -53,8 +53,9 @@ QUICK_RETRY_CONNECT_TIMEOUT_SECONDS = 3  # 위 대기(1초) + 이 값(3초) = �
 # ⚠ 2026-08-11 실사용 중 발견: 스캔으로 새 IP를 정확히 찾아도, 방금 재부팅/재연결된
 # 장비는 네트워크는 떴지만 sshd는 아직 준비 안 됐을 수 있다. 이 타이밍에 걸려 접속이
 # 실패하는 걸 흡수하기 위한 재시도 설정.
-NEW_IP_CONNECT_RETRY_COUNT = 2  # 총 시도 횟수 (최초 1회 + 재시도 1회)
-NEW_IP_CONNECT_RETRY_DELAY_SECONDS = 3
+NEW_IP_CONNECT_RETRY_COUNT = 5  # 총 시도 횟수 (최초 1회 + 재시도 4회)
+NEW_IP_CONNECT_RETRY_BASE_DELAY_SECONDS = 1
+NEW_IP_CONNECT_RETRY_MAX_DELAY_SECONDS = 4
 
 # ── 확인창 함수 등록 자리 ──────────────────────────────
 # app_ui.py가 시작할 때 set_confirm_callback(ask_confirm)으로 등록해둔다.
@@ -200,14 +201,22 @@ def _is_transient_transport_failure(exc):
     구분해서 처리한다 — IP가 막 재할당된 직후처럼 원격지가 아직 완전히 준비되지 않은
     상황에서 특히 자주 재현됨(실사용 중 확인).
     """
-    message = str(exc)
-    return "transport shut down" in message or "saw EOF" in message
+    message = str(exc).lower()
+    return (
+        "transport shut down" in message
+        or "saw eof" in message
+        or "error reading ssh protocol banner" in message
+    )
+
+
+def _is_retryable_connect_failure(exc):
+    return isinstance(exc, (socket.timeout, OSError)) or _is_transient_transport_failure(exc)
 
 
 # ⚠ Windows 전용 소켓 옵션(SIO_KEEPALIVE_VALS)이 없는 환경(리눅스 등)에서도 임포트/실행
 # 자체는 안전하게 하기 위해 hasattr로 존재 여부를 매번 확인한다 (아래 함수 참고).
-KEEPALIVE_PROBE_IDLE_MS = 5000    # 이만큼 조용하면 첫 프로브 시작
-KEEPALIVE_PROBE_INTERVAL_MS = 2000  # 이후 프로브 간격
+KEEPALIVE_PROBE_IDLE_MS = 3000    # 이만큼 조용하면 첫 프로브 시작
+KEEPALIVE_PROBE_INTERVAL_MS = 1000  # 이후 프로브 간격
 
 
 def _make_keepalive_socket(host, port, timeout):
@@ -268,6 +277,11 @@ def _connect(connect_kwargs):
             if attempt >= AUTH_TRANSPORT_RETRY_COUNT or not _is_transient_transport_failure(e):
                 raise  # 진짜 인증 실패(비번 틀림 등)는 재시도하지 말고 그대로 전파
             print(f"[SSH 인증 중 연결 끊김 - 재시도 {attempt + 1}/{AUTH_TRANSPORT_RETRY_COUNT}] {e}")
+            time.sleep(AUTH_TRANSPORT_RETRY_DELAY_SECONDS)
+        except paramiko.SSHException as e:
+            if attempt >= AUTH_TRANSPORT_RETRY_COUNT or not _is_transient_transport_failure(e):
+                raise
+            print(f"[SSH banner timeout - retry {attempt + 1}/{AUTH_TRANSPORT_RETRY_COUNT}] {e}")
             time.sleep(AUTH_TRANSPORT_RETRY_DELAY_SECONDS)
 
 
@@ -371,7 +385,9 @@ def connect_profile(profile_name, _mac_retry=False):
 
     try:
         client = _connect(connect_kwargs)
-    except (socket.timeout, OSError):
+    except Exception as e:
+        if not _is_retryable_connect_failure(e):
+            raise
         # ⚠ 2026-08-11 실사용 중 발견: 현장에서 "연결이 끊겼다"의 대부분은 IP가 실제로
         # 바뀐 게 아니라 Wi-Fi 순간 끊김 같은 일시적 문제였다. "같은 주소로 재시도"와
         # "MAC/mDNS 스캔"을 순차로 하면, IP가 진짜 바뀐 경우엔 재시도가 실패할 걸 알면서도
@@ -405,7 +421,9 @@ def connect_profile(profile_name, _mac_retry=False):
                 # ⚠ 스캔 결과는 이제 안 쓰지만, 이미 시작된 스캔 자체를 강제로 끊을 방법은
                 # 없다 — 그냥 백그라운드에서 마저 끝나도록 두고 기다리지 않는다(wait=False).
                 scan_executor.shutdown(wait=False)
-        except (socket.timeout, OSError):
+        except Exception as e:
+            if not _is_retryable_connect_failure(e):
+                raise
             # ⚠ 진짜 안 닿는 상태 - 기존 동적 IP 재탐색으로 진행
             if not can_rediscover:
                 raise
@@ -433,12 +451,19 @@ def connect_profile(profile_name, _mac_retry=False):
                 try:
                     client = _connect(connect_kwargs)
                     break
-                except (socket.timeout, OSError):
+                except Exception as e:
+                    if not _is_retryable_connect_failure(e):
+                        raise
                     if attempt >= NEW_IP_CONNECT_RETRY_COUNT - 1:
                         raise
+                    delay = min(
+                        NEW_IP_CONNECT_RETRY_BASE_DELAY_SECONDS + attempt,
+                        NEW_IP_CONNECT_RETRY_MAX_DELAY_SECONDS,
+                    )
                     print(f"[동적 IP 재탐색] 새로 찾은 IP({new_ip}) 접속 실패 - 서비스가 아직 "
-                          f"준비 안 됐을 수 있어 재시도 중...")
-                    time.sleep(NEW_IP_CONNECT_RETRY_DELAY_SECONDS)
+                          f"준비 안 됐을 수 있어 {delay}초 후 재시도 중 "
+                          f"({attempt + 2}/{NEW_IP_CONNECT_RETRY_COUNT})...")
+                    time.sleep(delay)
             ip_rediscovery_state.mark_resolved(profile_name, old_ip_for_banner, new_ip)
             # ⚠ 여기까지 예외 없이 왔으면 새 IP로 재접속까지 성공한 것. 시트에서 온
             # 프로파일이면(source="sheet") 방금 우리가 로컬에서 바꾼 host가 시트의 마지막
@@ -466,7 +491,8 @@ def connect_profile(profile_name, _mac_retry=False):
     # ⚠ 원격 장비에 직접 물어보는 방식(get_remote_mac)을 먼저 시도한다 — 로컬이든
     # 라우팅/터널을 거친 원격이든 상관없이 항상 동작하기 때문. 그게 실패하면(방화벽
     # 등으로 명령이 막히는 등 드문 경우) 기존 ARP 방식으로 대체한다.
-    captured_mac = get_remote_mac(client) or mac_discovery.get_mac_for_ip(resolved_host)
+    remote_macs = get_remote_macs(client)
+    captured_mac = remote_macs[0] if remote_macs else mac_discovery.get_mac_for_ip(resolved_host)
     stored_mac = profile.get("mac")
     if captured_mac:
         if not stored_mac:
@@ -474,7 +500,7 @@ def connect_profile(profile_name, _mac_retry=False):
             profile_store.update_profile_field(profile_name, mac=captured_mac)
             print(f"[MAC 저장] '{profile_name}' -> {captured_mac}")
             mac_mismatch_state.clear(profile_name)
-        elif stored_mac != captured_mac:
+        elif stored_mac not in remote_macs and stored_mac != captured_mac:
             # ⚠ 저장된 값은 일부러 덮어쓰지 않는다 — 자동으로 새 MAC을 기준값으로
             # 받아들이면, 진짜 엉뚱한 장비에 연결된 상황에서도 다음 접속부턴 조용히
             # "정상"처럼 보이게 되어 안전장치 의미가 없어진다. 사용자가 "수정"으로
@@ -569,6 +595,57 @@ def run_command(client, command):
 _MAC_RE = re.compile(r"^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$")
 
 
+def _normalize_remote_mac(mac):
+    if not mac:
+        return None
+    mac = mac.strip().lower().replace(":", "-")
+    if re.match(r"^[0-9a-f]{2}(-[0-9a-f]{2}){5}$", mac):
+        return mac
+    return None
+
+
+def get_remote_macs(client):
+    """
+    Return MAC addresses reported by the remote Linux host.
+
+    nmap/ARP sees the L2 interface MAC, while the old remote check only read the
+    default-route interface. On Jetson setups with Wi-Fi/Ethernet/virtual
+    interfaces, those can differ, so identity verification should accept the
+    stored MAC if it appears on any real remote interface.
+    """
+    try:
+        default_iface = ""
+        route_output = run_command(client, "ip route show default 2>/dev/null")
+        match = re.search(r"\bdev\s+(\S+)", route_output)
+        if match:
+            default_iface = match.group(1)
+
+        output = run_command(client, "for p in /sys/class/net/*/address; do i=$(basename $(dirname $p)); m=$(cat $p 2>/dev/null); echo \"$i $m\"; done")
+        primary = []
+        secondary = []
+        seen = set()
+        for line in output.splitlines():
+            parts = line.split()
+            if len(parts) != 2:
+                continue
+            iface, mac = parts
+            if iface == "lo" or mac == "00:00:00:00:00:00":
+                continue
+            normalized = _normalize_remote_mac(mac)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            if iface == default_iface:
+                primary.append(normalized)
+            elif iface.startswith(("docker", "br-", "veth", "virbr", "tun", "tap")):
+                secondary.append(normalized)
+            else:
+                primary.append(normalized)
+        return primary + secondary
+    except Exception:
+        return []
+
+
 def get_remote_mac(client):
     """
     ⚠ mac_discovery.get_mac_for_ip()(ARP 조회)의 근본적인 한계 대응 — ARP는 같은
@@ -589,8 +666,9 @@ def get_remote_mac(client):
             return None
         iface = match.group(1)
         mac_output = run_command(client, f"cat /sys/class/net/{iface}/address 2>/dev/null").strip()
-        if _MAC_RE.match(mac_output):
-            return mac_output.lower().replace(":", "-")
+        normalized = _normalize_remote_mac(mac_output)
+        if normalized:
+            return normalized
     except Exception:
         pass
     return None

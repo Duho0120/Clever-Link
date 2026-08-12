@@ -33,14 +33,14 @@ WS_PORT = 8765
 # 네트워크 상태를 확인하는 주기일 뿐이라, 짧게 잡아도 조용히 대기 중인 정상 세션을
 # 끊긴 것으로 오판하지 않는다 (아래에서 timeout만으로는 절대 끊긴 것으로 확정하지 않고
 # transport.is_active()를 반드시 같이 확인함).
-# ⚠ 2026-08-11 실사용 측정 후 10초 -> 5초로 단축 — 젯슨 IP 변경 시 끊김을 감지하는 데
-# 약 9초가 걸렸는데(이 주기 + 아래 재확인 대기), 그만큼 자동 재접속 시작도 늦어졌다.
-# 대기 중에는 CPU를 쓰지 않는 블로킹 대기라(폴링 아님) 주기를 줄여도 부담은 사실상 없다.
-CHANNEL_HEALTH_CHECK_INTERVAL_SECONDS = 5
+# ⚠ 2026-08-12 v4 — IP 변경 재접속 시간을 더 줄이기 위해 5초 -> 2초로 단축.
+# recv 타임아웃만으로 끊김 확정하지 않고 transport.is_active()와 재확인을 거치므로,
+# 정상적인 "출력이 없는 터미널"을 끊긴 것으로 오판하지 않는다.
+CHANNEL_HEALTH_CHECK_INTERVAL_SECONDS = 2
 # ⚠ 한 번 의심스럽다고(타임아웃 + is_active 확인 실패) 바로 "끊김"으로 확정하지 않는다 —
 # 아주 짧은(1~2초) 네트워크 흔들림일 수 있어서, 짧게 대기 후 한 번 더 확인한 뒤에만
 # 확정한다. 그래야 순간적인 blip마다 "연결 끊김" 배너가 깜빡이는 걸 막을 수 있다.
-DEAD_CONFIRM_RETRY_DELAY_SECONDS = 2
+DEAD_CONFIRM_RETRY_DELAY_SECONDS = 1
 
 
 async def _relay_channel_to_ws(channel, websocket):
@@ -106,6 +106,7 @@ async def handle_client(websocket):
         loop = asyncio.get_event_loop()
         client = await loop.run_in_executor(None, ssh_session.connect_profile, profile_name)
         channel = ssh_session.open_terminal_channel(client)
+        await websocket.send(json.dumps({"type": "connected"}))
 
         # 출력 중계를 백그라운드 작업으로 시작
         relay_task = asyncio.create_task(_relay_channel_to_ws(channel, websocket))

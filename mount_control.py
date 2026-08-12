@@ -252,6 +252,22 @@ def _capture_mac(profile, resolved_host, resolved_port):
     return mac or mac_discovery.get_mac_for_ip(resolved_host)
 
 
+def _capture_macs(profile, resolved_host, resolved_port):
+    try:
+        ssh_client = ssh_session.open_connection(profile, resolved_host, resolved_port)
+    except Exception:
+        fallback = mac_discovery.get_mac_for_ip(resolved_host)
+        return [fallback] if fallback else []
+    try:
+        macs = ssh_session.get_remote_macs(ssh_client)
+    finally:
+        ssh_client.close()
+    if macs:
+        return macs
+    fallback = mac_discovery.get_mac_for_ip(resolved_host)
+    return [fallback] if fallback else []
+
+
 def mount_profile(profile_name, drive_letter, remote_path="/", _mac_retry=False):
     """
     프로파일 이름으로 SFTP를 드라이브 문자에 마운트한다.
@@ -406,14 +422,15 @@ def mount_profile(profile_name, drive_letter, remote_path="/", _mac_retry=False)
     # 라우팅/터널(loclx.io 등)을 거친 원격지는 마운트 경로에서 MAC 검증 사각지대였다.
     # 지금은 _capture_mac()이 MAC 확인 전용의 짧은 SSH 연결을 열어 get_remote_mac()
     # 방식(장비한테 직접 물어보기)을 먼저 시도하고, 그게 실패할 때만 ARP로 대체한다.
-    captured_mac = _capture_mac(profile, resolved_host, resolved_port)
+    captured_macs = _capture_macs(profile, resolved_host, resolved_port)
+    captured_mac = captured_macs[0] if captured_macs else None
     stored_mac = profile.get("mac")
     if captured_mac:
         if not stored_mac:
             profile_store.update_profile_field(profile_name, mac=captured_mac)
             print(f"[MAC 저장] '{profile_name}' -> {captured_mac}")
             mac_mismatch_state.clear(profile_name)
-        elif stored_mac != captured_mac:
+        elif stored_mac not in captured_macs and stored_mac != captured_mac:
             other_owner = profile_store.find_profile_by_mac(captured_mac, exclude_name=profile_name)
             print(f"[MAC 불일치] '{profile_name}' 저장된 MAC({stored_mac}) != 지금 연결된 장비의 MAC({captured_mac})"
                   + (f" (이 MAC은 '{other_owner}'의 기준 MAC과 동일)" if other_owner else ""))

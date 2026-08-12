@@ -13,11 +13,13 @@
 import ipaddress
 import json
 import re
+import shutil
 import socket
 import subprocess
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+import xml.etree.ElementTree as ET
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 # ⚠ 2026-08-11 실측으로 확정한 값 — 예전엔 300ms였는데, 이게 "IP를 막 바꾼 직후에 못 찾는"
 # 문제의 진짜 원인이었다. 처음 접촉하는 IP는 ARP 해석부터 해야 해서 첫 응답이 유독 느리다
@@ -48,6 +50,20 @@ SCAN_RETRY_DELAY_SECONDS = 1
 # ⚠ 2026-08-11 실측 — 프로브 직후 곧바로 arp -a를 읽으면 늦게 응답한 장비가 누락된다
 # (같은 대역에서 46개 -> 3초 뒤 51개, 약 12% 차이). 짧게 기다렸다가 읽어 취합률을 올린다.
 ARP_SETTLE_DELAY_SECONDS = 3
+# ⚠ 2026-08-12 v4 실험 — nmap이 설치된 환경에서는 먼저 ARP discovery만 짧게 시도한다.
+# 핵심은 "단계를 하나 더 늘리는" 게 아니라, nmap이 수 초 안에 MAC을 바로 알려줄 수 있을 때만
+# 기존 ping+TCP 전체 스캔을 건너뛰는 빠른 경로로 쓰는 것이다. 권한/Npcap/환경 문제로 느려지거나
+# MAC을 못 주면 timeout 후 기존 방식으로 즉시 fallback한다.
+NMAP_ARP_DISCOVERY_ENABLED = True
+NMAP_MAX_RETRIES = 0
+NMAP_HOST_TIMEOUT = "800ms"
+NMAP_PROCESS_TIMEOUT_SECONDS = 2
+NMAP_NEARBY_RADIUS = 12
+NMAP_FULL_SUBNET_ENABLED = False
+NMAP_SINGLE_IP_CONCURRENCY = 6
+NMAP_SINGLE_IP_LAUNCH_DELAY_SECONDS = 0
+NMAP_FULL_SUBNET_PASSES = 4
+NMAP_REDISCOVERY_LOOP_DELAY_SECONDS = 1
 
 # ⚠ 7번 개선사항 — 백그라운드 점검(2번)이 도는 도중 사용자가 다른 프로파일을 수동
 # 접속/마운트하는 것처럼, 서로 다른 스레드에서 전체 서브넷 스캔(최대 1024호스트 ping+TCP)이
@@ -200,6 +216,17 @@ def _is_host_alive(ip, port):
         return False
 
 
+def _select_alive_mac_match(matches, port):
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        print(f"[스캔] 같은 MAC이 여러 IP에 보임 {matches} - 실제로 살아있는 주소를 확인합니다")
+        for ip_str in matches:
+            if _is_host_alive(ip_str, port):
+                return ip_str
+        return matches[0]
+    return None
+
 def _get_local_prefix_length(hint_ip):
     """
     이 PC의 실제 IPv4 인터페이스 중 hint_ip와 같은 /24 대역에 있는 것을 찾아서,
@@ -222,7 +249,13 @@ def _get_local_prefix_length(hint_ip):
         if isinstance(entries, dict):  # 인터페이스가 하나뿐이면 리스트가 아니라 dict 하나로 옴
             entries = [entries]
     except (subprocess.SubprocessError, OSError, ValueError):
-        return None
+        entries = None
+
+    if entries is None:
+        entries = [
+            {"IPAddress": ip, "PrefixLength": prefix}
+            for ip, prefix in _get_local_networks_from_ipconfig()
+        ]
 
     hint_prefix24 = ".".join(hint_ip.split(".")[:3])
     for entry in entries:
@@ -230,6 +263,54 @@ def _get_local_prefix_length(hint_ip):
         if ip.startswith(hint_prefix24 + "."):
             return entry.get("PrefixLength")
     return None
+
+
+def _subnet_mask_to_prefix(mask):
+    try:
+        return ipaddress.IPv4Network(f"0.0.0.0/{mask}").prefixlen
+    except ValueError:
+        return None
+
+
+def _get_local_networks_from_ipconfig():
+    """
+    Get-NetIPAddress가 권한 문제로 막히는 PC를 위한 fallback.
+    ipconfig 출력에서 IPv4 Address/Subnet Mask 쌍을 읽고, 실패하면 해당 IP의 /24로 보수적으로 잡는다.
+    """
+    try:
+        result = subprocess.run(
+            ["ipconfig"],
+            capture_output=True, text=True, timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return []
+
+    networks = []
+    current_ip = None
+    for line in result.stdout.splitlines():
+        match = re.search(r"IPv4[^\:]*:\s*(\d+\.\d+\.\d+\.\d+)", line)
+        if match:
+            current_ip = match.group(1)
+            continue
+        match = re.search(r"Subnet Mask[^\:]*:\s*(\d+\.\d+\.\d+\.\d+)", line)
+        if match and current_ip:
+            prefix = _subnet_mask_to_prefix(match.group(1)) or 24
+            if not (current_ip.startswith("169.254.") or current_ip.startswith("127.")):
+                networks.append((current_ip, prefix))
+            current_ip = None
+
+    if not networks:
+        try:
+            hostname = socket.gethostname()
+            for _, _, _, _, sockaddr in socket.getaddrinfo(hostname, None, socket.AF_INET):
+                ip = sockaddr[0]
+                if not (ip.startswith("169.254.") or ip.startswith("127.")):
+                    networks.append((ip, 24))
+        except socket.gaierror:
+            pass
+
+    return networks
 
 
 def _get_local_networks():
@@ -251,7 +332,7 @@ def _get_local_networks():
         if isinstance(entries, dict):
             entries = [entries]
     except (subprocess.SubprocessError, OSError, ValueError):
-        return []
+        return _get_local_networks_from_ipconfig()
 
     networks = []
     for entry in entries:
@@ -262,6 +343,294 @@ def _get_local_networks():
             continue
         networks.append((ip, entry.get("PrefixLength")))
     return networks
+
+
+def _find_ip_in_arp_cache(target_mac, network, port=DEFAULT_PROBE_PORT):
+    try:
+        result = subprocess.run(
+            ["arp", "-a"], capture_output=True, text=True, timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+
+    entries = _ARP_LINE.findall(result.stdout)
+    matches = [
+        ip_str
+        for ip_str, mac_str in entries
+        if _normalize_mac(mac_str) == target_mac and ipaddress.ip_address(ip_str) in network
+    ]
+    return _select_alive_mac_match(matches, port)
+
+
+def _nearby_ips(hint_ip, network, radius=NMAP_NEARBY_RADIUS):
+    try:
+        hint = ipaddress.ip_address(hint_ip)
+    except ValueError:
+        return []
+    if hint not in network:
+        return []
+
+    first = int(network.network_address) + 1
+    last = int(network.broadcast_address) - 1
+    hint_value = int(hint)
+    candidates = [hint_value]
+    candidates.extend(hint_value + offset for offset in range(1, radius + 1))
+    candidates.extend(hint_value - offset for offset in range(1, radius + 1))
+    return [
+        str(ipaddress.ip_address(value))
+        for value in candidates
+        if first <= value <= last
+    ]
+
+
+def _find_ip_with_nmap_arp(target_mac, scan_target, port=DEFAULT_PROBE_PORT):
+    """
+    nmap의 ARP discovery 결과에서 target_mac을 가진 IP를 찾는다.
+
+    `nmap -sn -PR -n`은 포트 스캔 없이 같은 L2 대역의 ARP 응답만 빠르게 수집한다.
+    관리자 권한/Npcap 상태에 따라 MAC이 안 나오거나 느려질 수 있으므로 짧은 timeout을 걸고,
+    실패하면 호출부가 기존 Python ping+TCP+ARP 방식으로 fallback한다.
+    """
+    if not NMAP_ARP_DISCOVERY_ENABLED:
+        return None
+    nmap_path = shutil.which("nmap")
+    if not nmap_path:
+        return None
+    if isinstance(scan_target, (list, tuple)):
+        target_args = [str(target) for target in scan_target]
+        target_label = ",".join(target_args[:3]) + ("..." if len(target_args) > 3 else "")
+        target_size = len(target_args)
+    else:
+        target_args = [str(scan_target)]
+        target_label = str(scan_target)
+        target_size = getattr(scan_target, "num_addresses", 1)
+
+    if target_size > SCAN_MAX_HOSTS + 2:
+        return None
+
+    started = time.time()
+    try:
+        result = subprocess.run(
+            [
+                nmap_path,
+                "-sn",
+                "-PR",
+                "-n",
+                "--max-retries", str(NMAP_MAX_RETRIES),
+                "--host-timeout", NMAP_HOST_TIMEOUT,
+                "-oX", "-",
+                *target_args,
+            ],
+            capture_output=True, text=True, timeout=NMAP_PROCESS_TIMEOUT_SECONDS,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"[nmap 스캔] {target_label} ARP discovery가 {NMAP_PROCESS_TIMEOUT_SECONDS}초를 넘겨 기존 방식으로 전환")
+        return None
+    except (subprocess.SubprocessError, OSError):
+        return None
+
+    matches = []
+    try:
+        root = ET.fromstring(result.stdout)
+        for host in root.findall("host"):
+            ip_addr = None
+            mac_addr = None
+            for addr in host.findall("address"):
+                addr_type = addr.get("addrtype")
+                if addr_type == "ipv4":
+                    ip_addr = addr.get("addr")
+                elif addr_type == "mac":
+                    mac_addr = addr.get("addr")
+            if ip_addr and mac_addr and _normalize_mac(mac_addr) == target_mac:
+                matches.append(ip_addr)
+    except ET.ParseError:
+        return None
+
+    if matches:
+        print(f"[nmap 스캔] 대상 MAC({target_mac}) 발견: {matches} ({time.time() - started:.1f}초)")
+        return _select_alive_mac_match(matches, port)
+
+    print(f"[nmap 스캔 진단] 대상={target_label} / {time.time() - started:.1f}초 - 대상 MAC({target_mac}) 없음")
+    return None
+
+
+def _iter_nearby_ips_for_anchors(anchors, network, radius=NMAP_NEARBY_RADIUS):
+    seen = set()
+    anchor_values = []
+    for anchor in anchors:
+        try:
+            ip = ipaddress.ip_address(anchor)
+        except ValueError:
+            continue
+        if ip in network and ip not in anchor_values:
+            anchor_values.append(ip)
+
+    first = int(network.network_address) + 1
+    last = int(network.broadcast_address) - 1
+
+    for ip in anchor_values:
+        candidate = str(ip)
+        seen.add(candidate)
+        yield candidate
+
+    for direction in (1, -1):
+        for offset in range(1, radius + 1):
+            for anchor in anchor_values:
+                value = int(anchor) + (direction * offset)
+                if not (first <= value <= last):
+                    continue
+                candidate = str(ipaddress.ip_address(value))
+                if candidate in seen:
+                    continue
+                seen.add(candidate)
+                yield candidate
+
+
+def _find_ip_with_nmap_nearby(target_mac, anchors, network, port=DEFAULT_PROBE_PORT):
+    for ip in _iter_nearby_ips_for_anchors(anchors, network):
+        found = _find_ip_with_nmap_arp(target_mac, ip, port)
+        if found:
+            return found
+    return None
+
+
+def _extract_nmap_mac_match(xml_text, target_mac):
+    matches = []
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return matches
+
+    for host in root.findall("host"):
+        ip_addr = None
+        mac_addr = None
+        for addr in host.findall("address"):
+            addr_type = addr.get("addrtype")
+            if addr_type == "ipv4":
+                ip_addr = addr.get("addr")
+            elif addr_type == "mac":
+                mac_addr = addr.get("addr")
+        if ip_addr and mac_addr and _normalize_mac(mac_addr) == target_mac:
+            matches.append(ip_addr)
+    return matches
+
+
+def _nmap_single_ip(nmap_path, ip, target_mac):
+    try:
+        result = subprocess.run(
+            [
+                nmap_path,
+                "-sn",
+                "-PR",
+                "-n",
+                "--max-retries", str(NMAP_MAX_RETRIES),
+                "--host-timeout", NMAP_HOST_TIMEOUT,
+                "-oX", "-",
+                ip,
+            ],
+            capture_output=True, text=True, timeout=NMAP_PROCESS_TIMEOUT_SECONDS,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
+        return None
+
+    matches = _extract_nmap_mac_match(result.stdout, target_mac)
+    return matches[0] if matches else None
+
+
+def _ordered_hosts_for_nmap_pass(network, pass_index):
+    hosts = [str(ip) for ip in network.hosts()]
+    if len(hosts) > SCAN_MAX_HOSTS:
+        hosts = hosts[:SCAN_MAX_HOSTS]
+    if not hosts:
+        return hosts
+
+    lane_count = max(1, NMAP_SINGLE_IP_CONCURRENCY)
+    lane_size = (len(hosts) + lane_count - 1) // lane_count
+    lanes = [
+        hosts[start:start + lane_size]
+        for start in range(0, len(hosts), lane_size)
+    ]
+    if pass_index:
+        shift = pass_index % len(lanes)
+        lanes = lanes[shift:] + lanes[:shift]
+
+    ordered = []
+    max_lane_len = max(len(lane) for lane in lanes)
+    for index in range(max_lane_len):
+        for lane in lanes:
+            if index < len(lane):
+                ordered.append(lane[index])
+    return ordered
+
+
+def _find_ip_with_nmap_full_subnet_single_ip(target_mac, network, port=DEFAULT_PROBE_PORT, pass_index=0):
+    """
+    Scan the whole local subnet using one nmap process per IP, with bounded concurrency.
+
+    Range-style nmap was unreliable in field tests, while exact single-IP nmap was stable.
+    This keeps that reliable primitive and feeds it gradually so Wi-Fi/AP ARP handling is
+    not hit by a burst of 254 simultaneous probes.
+    """
+    if not NMAP_ARP_DISCOVERY_ENABLED:
+        return None
+    nmap_path = shutil.which("nmap")
+    if not nmap_path:
+        print("[nmap scan] nmap not found; skipping nmap rediscovery")
+        return None
+
+    hosts = _ordered_hosts_for_nmap_pass(network, pass_index)
+    if not hosts:
+        return None
+
+    started = time.time()
+    pending = {}
+    next_index = 0
+    executor = ThreadPoolExecutor(max_workers=NMAP_SINGLE_IP_CONCURRENCY)
+
+    def submit_next():
+        nonlocal next_index
+        if next_index >= len(hosts):
+            return False
+        ip = hosts[next_index]
+        next_index += 1
+        future = executor.submit(_nmap_single_ip, nmap_path, ip, target_mac)
+        pending[future] = ip
+        return True
+
+    try:
+        while len(pending) < NMAP_SINGLE_IP_CONCURRENCY and submit_next():
+            time.sleep(NMAP_SINGLE_IP_LAUNCH_DELAY_SECONDS)
+
+        while pending:
+            done, _ = wait(set(pending), return_when=FIRST_COMPLETED)
+            for future in done:
+                scanned_ip = pending.pop(future)
+                try:
+                    found = future.result()
+                except Exception:
+                    found = None
+                if found:
+                    seconds = time.time() - started
+                    print(
+                        f"[nmap scan] pass={pass_index + 1} found MAC {target_mac} "
+                        f"at {found} after {next_index} probes in {seconds:.1f}s"
+                    )
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    return _select_alive_mac_match([found], port) or found
+
+                while len(pending) < NMAP_SINGLE_IP_CONCURRENCY and submit_next():
+                    time.sleep(NMAP_SINGLE_IP_LAUNCH_DELAY_SECONDS)
+
+        print(
+            f"[nmap scan] pass={pass_index + 1} scanned {len(hosts)} hosts "
+            f"in {time.time() - started:.1f}s; MAC {target_mac} not found"
+        )
+        return None
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def _scan_once(target_mac, network, port=DEFAULT_PROBE_PORT, workers=SCAN_MAX_WORKERS):
@@ -304,19 +673,9 @@ def _scan_once(target_mac, network, port=DEFAULT_PROBE_PORT, workers=SCAN_MAX_WO
 
     entries = _ARP_LINE.findall(result.stdout)
     matches = [ip_str for ip_str, mac_str in entries if _normalize_mac(mac_str) == target_mac]
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) > 1:
-        # ⚠ 2026-08-11 발견한 버그 — 예전엔 그냥 "첫 번째로 일치하는 IP"를 돌려줬다.
-        # 장비가 IP를 옮긴 직후엔 Windows ARP 캐시에 예전 IP의 낡은 항목이 한동안 남아있어서,
-        # 같은 MAC이 옛 IP와 새 IP 두 곳에 걸쳐 보일 수 있다. arp -a는 IP 오름차순이라 옛 IP가
-        # 먼저 나오면 죽은 주소를 돌려주게 되고, 그게 지금 저장된 host와 같으면 호출부에서
-        # "새 IP를 찾지 못함"으로 처리돼 재탐색이 통째로 실패했다. 실제로 살아있는 쪽을 고른다.
-        print(f"[스캔] 같은 MAC이 여러 IP에 보임 {matches} - 실제로 살아있는 주소를 확인합니다")
-        for ip_str in matches:
-            if _is_host_alive(ip_str, port):
-                return ip_str
-        return matches[0]  # 전부 확인 실패하면 예전 동작대로 첫 번째
+    found = _select_alive_mac_match(matches, port)
+    if found:
+        return found
 
     # ⚠ 진단용 로그(2026-08-11) — 스캔이 실패했을 때 "우리가 실제로 무엇을 봤는지"를 남긴다.
     # 스캔이 대역을 제대로 훑었는데도 대상 MAC이 ARP에 아예 안 잡힌 것인지(=장비가 그 순간
@@ -375,11 +734,6 @@ def find_ip_for_mac(mac, subnet_hint_ip, port=DEFAULT_PROBE_PORT, known_ips=None
     """
     target_mac = _normalize_mac(mac)
 
-    if known_ips:
-        found = _check_known_ips(target_mac, [ip for ip in known_ips if ip != subnet_hint_ip], port)
-        if found:
-            return found
-
     prefix_len = _get_local_prefix_length(subnet_hint_ip)
     if prefix_len is not None:
         scan_targets = [(subnet_hint_ip, prefix_len)]
@@ -399,17 +753,24 @@ def find_ip_for_mac(mac, subnet_hint_ip, port=DEFAULT_PROBE_PORT, known_ips=None
                     network = ipaddress.ip_network(f"{ip}/{prefix or 24}", strict=False)
                 except ValueError:
                     continue
-                for attempt in range(SCAN_RETRY_COUNT):
+                found = _find_ip_in_arp_cache(target_mac, network, port)
+                if found:
+                    return found
+                for attempt in range(NMAP_FULL_SUBNET_PASSES):
                     if background and attempt > 0 and _is_user_waiting():
                         print("[스캔] 사용자 요청 스캔이 대기 중 - 백그라운드 재시도를 건너뛰고 양보합니다")
                         return None
                     if attempt > 0:
-                        time.sleep(SCAN_RETRY_DELAY_SECONDS)
-                    # ⚠ 시도마다 동시 수를 다르게 — 1차는 빠르게, 놓치면 2차는 촘촘하게
-                    workers = SCAN_WORKERS_BY_ATTEMPT[min(attempt, len(SCAN_WORKERS_BY_ATTEMPT) - 1)]
-                    found = _scan_once(target_mac, network, port, workers)
+                        time.sleep(NMAP_REDISCOVERY_LOOP_DELAY_SECONDS)
+                    found = _find_ip_in_arp_cache(target_mac, network, port)
                     if found:
                         return found
+                    found = _find_ip_with_nmap_full_subnet_single_ip(
+                        target_mac, network, port, pass_index=attempt
+                    )
+                    if found:
+                        return found
+                    # ⚠ 시도마다 동시 수를 다르게 — 1차는 빠르게, 놓치면 2차는 촘촘하게
     finally:
         if not background:
             _change_user_waiting(-1)

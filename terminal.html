@@ -10,7 +10,7 @@
   body { font-family: 'Malgun Gothic', sans-serif; }
   #terminalHeader { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #2a2a2a; box-sizing: border-box; }
   #terminalTitle { color: #ccc; }
-  #reconnectBtn { display: none; background: #7d4a2d; color: white; padding: 6px 12px; border-radius: 4px; border: none; cursor: pointer; }
+  #reconnectBtn { display: inline-block; background: #7d4a2d; color: white; padding: 6px 12px; border-radius: 4px; border: none; cursor: pointer; }
   #terminalContainer { height: calc(100% - 40px); padding: 4px; box-sizing: border-box; }
 </style>
 </head>
@@ -32,6 +32,7 @@ let profileName = '';
 let term = null;
 let fitAddon = null;
 let ws = null;
+let _wsGeneration = 0;
 
 function initTerminal() {
     term = new Terminal({
@@ -132,39 +133,45 @@ function initTerminal() {
 }
 
 function connectWebSocket() {
+    const generation = ++_wsGeneration;
     // ⚠ 이전 연결이 남아있으면 반드시 먼저 닫는다 (세션이 섞이는 버그 방지, F-6 참고)
     if (ws) {
         ws.onmessage = null;
+        ws.onerror = null;
+        ws.onclose = null;
         ws.close();
     }
 
     ws = new WebSocket('ws://localhost:8765');
 
     ws.onopen = () => {
+        if (generation !== _wsGeneration) return;
         ws.send(JSON.stringify({ type: 'init', profile: profileName }));
         fitAddon.fit();
         ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
     };
 
     ws.onmessage = (event) => {
+        if (generation !== _wsGeneration) return;
         const msg = JSON.parse(event.data);
-        if (msg.type === 'output') {
+        if (msg.type === 'connected') {
+            onConnectionAlive();
+            term.write('\r\n[연결 완료]\r\n');
+        } else if (msg.type === 'output') {
             term.write(msg.data);
             onConnectionAlive();
         } else if (msg.type === 'error') {
             term.write(`\r\n[오류] ${msg.message}\r\n`);
-            document.getElementById('reconnectBtn').style.display = 'inline-block';
-            scheduleAutoRetry();
+            handleDisconnected();
         } else if (msg.type === 'closed') {
             term.write('\r\n[연결 끊김]\r\n');
-            document.getElementById('reconnectBtn').style.display = 'inline-block';
-            scheduleAutoRetry();
+            handleDisconnected();
         }
     };
 
     ws.onerror = () => {
-        document.getElementById('reconnectBtn').style.display = 'inline-block';
-        scheduleAutoRetry();
+        if (generation !== _wsGeneration) return;
+        handleDisconnected();
     };
 }
 
@@ -177,9 +184,20 @@ function connectWebSocket() {
 // 이미 15초쯤 걸린다(초기 접속 5초 + 같은 주소 재시도 4초 + MAC 스캔). 그 위에 대기까지
 // 길게 잡으니 전체 복구가 60초 가까이 걸렸다. 시도 자체가 충분히 긴 간격 역할을 하므로
 // 앞쪽 대기를 줄이고, 계속 실패하면 그때부터 간격을 벌린다.
-const AUTO_RETRY_DELAYS_MS = [5000, 8000, 12000, 20000, 30000, 30000, 60000, 60000, 60000, 60000];
+const AUTO_RETRY_DELAYS_MS = [5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000];
 let _autoRetryTimer = null;
 let _autoRetryIndex = 0;
+
+function handleDisconnected() {
+    if (_autoRetryIndex === 0 && !_autoRetryTimer) {
+        _autoRetryIndex = 1;
+        term.write('\r\n[자동 재접속] 첫 번째 재접속을 바로 시도합니다...\r\n');
+        reconnectTerminal({ auto: true });
+        return;
+    }
+    document.getElementById('reconnectBtn').style.display = 'inline-block';
+    scheduleAutoRetry();
+}
 
 function scheduleAutoRetry() {
     if (_autoRetryTimer) return;  // 이미 예약돼 있으면 중복 예약 안 함
@@ -216,7 +234,6 @@ function reconnectTerminal(opts) {
         _autoRetryIndex = 0;  // 사용자가 직접 누른 거면 재시도 횟수를 처음부터 다시 센다
     }
     term.write('\r\n[재접속 중...]\r\n');
-    document.getElementById('reconnectBtn').style.display = 'none';
     connectWebSocket();
 }
 
