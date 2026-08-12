@@ -30,9 +30,16 @@ DEFAULT_PROBE_PORT = 22  # 대상 포트를 모를 때(예: 호출부가 안 넘
 # ⚠ 타임아웃을 늘린 만큼 스캔이 느려지므로 병렬 수를 함께 올려서 전체 소요 시간을 비슷하게
 # 유지한다. 대부분의 시간은 응답 없는 빈 IP에서 소모된다. (ping/TCP를 각각 별도 작업으로
 # 큐에 넣으므로 실제 작업 수는 호스트 수의 2배 — _scan_once 참고)
-SCAN_MAX_WORKERS = 96
+# ⚠ 2026-08-11 실측으로 확정 — 동시 요청을 많이 걸수록 오히려 대상을 놓친다. 같은 대역을
+# 반복 측정했더니 96동시=36~48개, 48동시=44~52개, 32동시=51~59개, 24동시=51~52개로,
+# 동시 수를 줄일수록 ARP 수집률이 뚜렷하게 올라갔다. 254개 IP에 ping+TCP를 한꺼번에
+# 쏟아부으면 그 혼잡에 정작 찾으려는 장비의 응답이 묻히는 것으로 보인다(대상도 Wi-Fi라
+# 특히 취약). 실제로 단발 ping은 즉시 성공하는데 스캔만 실패하는 상황을 여러 번 재현함.
+# 그래서 1차는 빠르게(96) 훑어 흔한 경우를 즉시 잡고, 놓치면 2차는 촘촘하게(32) 다시 훑는다.
+SCAN_WORKERS_BY_ATTEMPT = [96, 32]
+SCAN_MAX_WORKERS = SCAN_WORKERS_BY_ATTEMPT[0]  # 기본값(호출부가 따로 안 정할 때)
 SCAN_MAX_HOSTS = 1024  # ⚠ 실제 대역이 너무 넓으면(/22보다 넓으면) 스캔이 너무 느려지므로 상한선
-SCAN_RETRY_COUNT = 2  # 한 번 실패해도 순간적인 타이밍/혼잡 문제일 수 있어 재시도
+SCAN_RETRY_COUNT = len(SCAN_WORKERS_BY_ATTEMPT)  # 시도마다 위 동시 수를 순서대로 적용
 # ⚠ 2026-08-10 실사용 중 발견: 장비가 막 재부팅/재연결 중이라 아주 잠깐(1차 스캔 시점에)
 # 응답을 못 하다가 몇 초 뒤엔 정상 응답하는 경우가 있었다. 재시도 사이에 간격 없이
 # 곧바로 다시 스캔하면 이런 "일시적으로 늦게 붙는" 경우를 놓치기 쉬워서, 짧게 대기했다가
@@ -257,7 +264,7 @@ def _get_local_networks():
     return networks
 
 
-def _scan_once(target_mac, network, port=DEFAULT_PROBE_PORT):
+def _scan_once(target_mac, network, port=DEFAULT_PROBE_PORT, workers=SCAN_MAX_WORKERS):
     hosts = [str(ip) for ip in network.hosts()]
     if len(hosts) > SCAN_MAX_HOSTS:
         hosts = hosts[:SCAN_MAX_HOSTS]
@@ -276,7 +283,7 @@ def _scan_once(target_mac, network, port=DEFAULT_PROBE_PORT):
         else:
             _tcp_probe_once(ip, port)
 
-    with ThreadPoolExecutor(max_workers=SCAN_MAX_WORKERS) as pool:
+    with ThreadPoolExecutor(max_workers=workers) as pool:
         list(pool.map(run_task, tasks))
     probe_seconds = time.time() - started
 
@@ -398,7 +405,9 @@ def find_ip_for_mac(mac, subnet_hint_ip, port=DEFAULT_PROBE_PORT, known_ips=None
                         return None
                     if attempt > 0:
                         time.sleep(SCAN_RETRY_DELAY_SECONDS)
-                    found = _scan_once(target_mac, network, port)
+                    # ⚠ 시도마다 동시 수를 다르게 — 1차는 빠르게, 놓치면 2차는 촘촘하게
+                    workers = SCAN_WORKERS_BY_ATTEMPT[min(attempt, len(SCAN_WORKERS_BY_ATTEMPT) - 1)]
+                    found = _scan_once(target_mac, network, port, workers)
                     if found:
                         return found
     finally:

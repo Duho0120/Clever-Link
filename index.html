@@ -139,6 +139,22 @@ function setStatus(msg) {
     document.getElementById('status').innerText = msg;
 }
 
+// ⚠ 재접속/재탐색 진행 상황을 상태줄에 흘려보낸다 (사용자 요청 2026-08-11).
+// 지금까지 이 진행 상황은 콘솔과 터미널 창에만 나와서, 앱 창만 보고 있으면 지금 뭘
+// 하고 있는지 알 수 없었다. 연결을 기다리는 동안 보게 되는 곳이 이 상태줄이라 여기에
+// 띄운다. 배너와 달리 X로 닫을 필요 없이 다음 메시지로 계속 덮어써지고, 백엔드에서
+// 일정 시간이 지나면 목록에서 저절로 빠진다(activity_log.MESSAGE_TTL_SECONDS).
+let _lastActivityText = null;
+
+async function refreshActivityStatus() {
+    const items = await window.pywebview.api.get_recent_activity();
+    if (!items || items.length === 0) return;
+    const latest = items[items.length - 1].text;
+    if (latest === _lastActivityText) return;  // 같은 메시지를 계속 덮어쓰지 않음
+    _lastActivityText = latest;
+    setStatus(latest);
+}
+
 // V2/V3 디자인용 모노톤 SVG 아이콘 (RaiDrive처럼 통일된 선 굵기의 아이콘 세트로 통일하기 위함).
 // V1은 .row-icon/.btn-icon을 display:none 처리하므로 이 마크업이 실제로 그려지진 않는다.
 const ICONS = {
@@ -949,6 +965,9 @@ async function openTerminalWindow(name) {
 // 이미 파이썬 메모리에 있는 상태(mdns_ambiguity_state 등)를 다시 읽어오는 것뿐이라
 // 가볍다.
 let _bannerPollTimer = null;
+// ⚠ 진행 상황(상태줄)은 몇 초 만에 여러 단계가 지나가므로 배너(7초)보다 자주 확인한다.
+// 파이썬 메모리에 있는 최근 메시지 목록만 읽어오는 아주 가벼운 호출이라 부담은 없다.
+let _activityPollTimer = null;
 
 async function pollBanners() {
     await refreshMdnsWarningBanner();
@@ -968,6 +987,9 @@ async function init() {
 
     if (!_bannerPollTimer) {
         _bannerPollTimer = setInterval(pollBanners, 7000);
+    }
+    if (!_activityPollTimer) {
+        _activityPollTimer = setInterval(refreshActivityStatus, 2000);
     }
 }
 

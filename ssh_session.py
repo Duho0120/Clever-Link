@@ -27,6 +27,7 @@ import mac_mismatch_state
 import mac_resolved_state
 import sheet_diverged_state
 import ip_rediscovery_state
+import activity_log
 
 KNOWN_HOSTS_FILE = "known_hosts_launcher"  # 우리 앱 전용 known_hosts 파일
 # ⚠ 2026-08-11 실사용 중 발견 — 30초는 죽은 연결을 알아채기엔 너무 길었다(터미널
@@ -308,7 +309,7 @@ def _rediscover_new_ip(profile_name, profile, resolved_host, resolved_port):
         # ⚠ print()에 "—"(em dash) 같은 특수문자를 쓰면 콘솔 인코딩이 UTF-8이 아닐 때
         # (Windows 기본 cp949 등) UnicodeEncodeError로 여기서 그대로 죽어버린다 — 실제로
         # 테스트하다 겪은 버그. 안전하게 일반 하이픈만 사용한다.
-        print(f"[동적 IP 재탐색] '{profile_name}' 접속 실패 - 새 IP 탐색 중...")
+        activity_log.log(profile_name, f"[동적 IP 재탐색] '{profile_name}' 접속 실패 - 새 IP 탐색 중...")
         new_ip = None
         if profile.get("mac"):
             new_ip = mac_discovery.find_ip_for_mac(
@@ -317,7 +318,7 @@ def _rediscover_new_ip(profile_name, profile, resolved_host, resolved_port):
             # ⚠ MAC 스캔이 실패하면(ICMP 차단 등) 2차 보험으로 mDNS(호스트 이름)로
             # 한 번 더 시도한다. 호스트 이름을 아직 모르면(SSH 터미널을 한 번도 연
             # 적이 없으면) 애초에 시도할 게 없다.
-            print(f"[동적 IP 재탐색] MAC으로 못 찾음 - mDNS(호스트 이름 '{profile['hostname']}')로 재시도 중...")
+            activity_log.log(profile_name, f"[동적 IP 재탐색] MAC으로 못 찾음 - mDNS(호스트 이름 '{profile['hostname']}')로 재시도 중...")
             candidates = mdns_discovery.resolve_mdns_hostname_all(profile["hostname"])
             # ⚠ 다른 장비가 같은 호스트 이름을 쓰고 있으면 응답이 여러 개 올 수 있다.
             # 이럴 때 아무거나 하나를 골라 조용히 연결해버리면 엉뚱한 장비에 접속될
@@ -337,9 +338,9 @@ def _rediscover_new_ip(profile_name, profile, resolved_host, resolved_port):
                 )
             new_ip = candidates[0] if candidates else None
         if not new_ip or new_ip == resolved_host:
-            print(f"[동적 IP 재탐색] '{profile_name}' 새 IP를 찾지 못함 (같은 네트워크 대역에 없거나 오프라인)")
+            activity_log.log(profile_name, f"[동적 IP 재탐색] '{profile_name}' 새 IP를 찾지 못함 (같은 네트워크 대역에 없거나 오프라인)")
             return None
-        print(f"[동적 IP 재탐색] 새 IP 발견: {new_ip} (기존: {resolved_host})")
+        activity_log.log(profile_name, f"[동적 IP 재탐색] 새 IP 발견: {new_ip} (기존: {resolved_host})")
         return new_ip
     finally:
         ip_rediscovery_state.clear_in_progress(profile_name)
@@ -389,7 +390,7 @@ def connect_profile(profile_name, _mac_retry=False):
             scan_future = scan_executor.submit(
                 _rediscover_new_ip, profile_name, profile, resolved_host, resolved_port)
 
-        print(f"[재접속] '{profile_name}' 같은 주소로 짧게 재시도 중 (순간적인 끊김일 수 있음)...")
+        activity_log.log(profile_name, f"[재접속] '{profile_name}' 같은 주소로 짧게 재시도 중 (순간적인 끊김일 수 있음)...")
         time.sleep(QUICK_RETRY_DELAY_SECONDS)
         quick_retry_kwargs = {
             **connect_kwargs,
@@ -399,7 +400,7 @@ def connect_profile(profile_name, _mac_retry=False):
         }
         try:
             client = _connect(quick_retry_kwargs)
-            print(f"[재접속] '{profile_name}' 같은 주소로 재시도 성공 - IP 재탐색 불필요")
+            activity_log.log(profile_name, f"[재접속] '{profile_name}' 같은 주소로 재시도 성공 - IP 재탐색 불필요")
             if scan_executor:
                 # ⚠ 스캔 결과는 이제 안 쓰지만, 이미 시작된 스캔 자체를 강제로 끊을 방법은
                 # 없다 — 그냥 백그라운드에서 마저 끝나도록 두고 기다리지 않는다(wait=False).
@@ -415,7 +416,7 @@ def connect_profile(profile_name, _mac_retry=False):
             scan_executor.shutdown(wait=False)
             if not new_ip:
                 raise
-            print(f"[동적 IP 재탐색] 새 IP({new_ip})로 프로파일 갱신 후 재접속")
+            activity_log.log(profile_name, f"[동적 IP 재탐색] 새 IP({new_ip})로 프로파일 갱신 후 재접속")
             profile_store.update_profile_field(profile_name, host=new_ip)
             # ⚠ 초록 배너("재연결 성공") — 실제로 새 IP로 재접속까지 성공해야 의미가
             # 있으므로, 여기선 표시만 준비해두고 아래 재접속(_connect)이 실제로 예외
@@ -502,11 +503,11 @@ def connect_profile(profile_name, _mac_retry=False):
                 # 경우에는 배너가 하나도 안 뜨는 문제가 있었다 (2026-08-11 사용자 확인).
                 ip_rediscovery_state.mark_in_progress(profile_name)
                 try:
-                    print(f"[MAC 불일치 자동 복구 시도] 저장된 MAC({stored_mac})을 가진 진짜 장비를 찾는 중...")
+                    activity_log.log(profile_name, f"[MAC 불일치 자동 복구 시도] 저장된 MAC({stored_mac})을 가진 진짜 장비를 찾는 중...")
                     correct_ip = mac_discovery.find_ip_for_mac(
                         stored_mac, resolved_host, resolved_port, known_ips=profile.get("recent_ips"))
                     if correct_ip and correct_ip != resolved_host:
-                        print(f"[MAC 불일치 자동 복구] 올바른 장비를 {correct_ip}에서 찾음 - 재접속 시도")
+                        activity_log.log(profile_name, f"[MAC 불일치 자동 복구] 올바른 장비를 {correct_ip}에서 찾음 - 재접속 시도")
                         client.close()
                         profile_store.update_profile_field(profile_name, host=correct_ip)
                         # ⚠ 재귀 호출이 실제로 성공해야 의미가 있으므로, 그게 예외 없이
@@ -514,7 +515,7 @@ def connect_profile(profile_name, _mac_retry=False):
                         result = connect_profile(profile_name, _mac_retry=True)
                         ip_rediscovery_state.mark_resolved(profile_name, resolved_host, correct_ip)
                         return result
-                    print("[MAC 불일치 자동 복구 실패] 로컬 대역에서 진짜 장비를 못 찾음 - 접속 차단")
+                    activity_log.log(profile_name, "[MAC 불일치 자동 복구 실패] 로컬 대역에서 진짜 장비를 못 찾음 - 접속 차단")
                 finally:
                     ip_rediscovery_state.clear_in_progress(profile_name)
 

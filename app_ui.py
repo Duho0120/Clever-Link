@@ -28,6 +28,7 @@ import mdns_ambiguity_state
 import mac_mismatch_state
 import mac_resolved_state
 import ip_rediscovery_state
+import activity_log
 import sheet_diverged_state
 import sheet_sync
 import tray_icon
@@ -42,7 +43,7 @@ from resource_path import resource_path, app_dir
 # 겪은 문제, 2026-08-05). 그래서 "이번에 실행 중인 코드의 버전"과 "마지막으로 실행했을 때
 # 버전"을 비교해서, 다르면(=새 버전이 배포된 것) 그때만 캐시를 지운다 — 평소 재실행에는
 # 영향 없고, 새 버전 배포 직후 첫 실행 한 번만 느려진다(~10초).
-APP_BUILD_VERSION = "18"
+APP_BUILD_VERSION = "19"
 
 
 # ── 종료 확인 팝업 전용 스레드 ──────────────────────────────
@@ -443,6 +444,15 @@ class Api:
             {"name": name, **info}
             for name, info in ip_rediscovery_state.get_all_resolved().items()
         ]
+
+    def get_recent_activity(self):
+        """
+        재접속/재탐색 진행 상황(예: "같은 주소로 짧게 재시도 중", "새 IP 발견")을
+        최근 것부터 돌려준다. 앱 창 하단 상태줄에 잠깐 흘려보내는 용도 —
+        지금까지 콘솔에만 찍혀서, 콘솔 없이 쓰는 현장에서는 무슨 일이 벌어지는지
+        전혀 알 수 없었다 (사용자 요청 2026-08-11). 일정 시간이 지나면 저절로 빠진다.
+        """
+        return activity_log.get_recent()
 
     def get_duplicate_ip_groups(self):
         """
