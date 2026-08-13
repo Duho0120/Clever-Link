@@ -23,6 +23,7 @@ import mount_control
 import terminal_server
 import winfsp_check
 import webview2_check
+import nmap_check
 import ssh_session
 import mdns_ambiguity_state
 import mac_mismatch_state
@@ -43,7 +44,7 @@ from resource_path import resource_path, app_dir
 # 겪은 문제, 2026-08-05). 그래서 "이번에 실행 중인 코드의 버전"과 "마지막으로 실행했을 때
 # 버전"을 비교해서, 다르면(=새 버전이 배포된 것) 그때만 캐시를 지운다 — 평소 재실행에는
 # 영향 없고, 새 버전 배포 직후 첫 실행 한 번만 느려진다(~10초).
-APP_BUILD_VERSION = "19"
+APP_BUILD_VERSION = "20"
 
 
 # ── 종료 확인 팝업 전용 스레드 ──────────────────────────────
@@ -560,6 +561,9 @@ if __name__ == "__main__":
 
     # WinFsp 설치 확인 (없으면 사용자 동의 후 winget으로 자동 설치)
     winfsp_check.ensure_winfsp(ask_confirm)
+
+    # Nmap 설치 확인 (v4 동적 IP 재탐색의 ARP discovery에 사용)
+    nmap_check.ensure_nmap(ask_confirm)
 
     INDEX_PATH = resource_path("index.html")
 

@@ -12,6 +12,7 @@
 
 import ipaddress
 import json
+import os
 import re
 import shutil
 import socket
@@ -394,7 +395,7 @@ def _find_ip_with_nmap_arp(target_mac, scan_target, port=DEFAULT_PROBE_PORT):
     """
     if not NMAP_ARP_DISCOVERY_ENABLED:
         return None
-    nmap_path = shutil.which("nmap")
+    nmap_path = _find_nmap_exe()
     if not nmap_path:
         return None
     if isinstance(scan_target, (list, tuple)):
@@ -517,6 +518,19 @@ def _extract_nmap_mac_match(xml_text, target_mac):
     return matches
 
 
+def _find_nmap_exe():
+    found = shutil.which("nmap")
+    if found:
+        return found
+    for path in (
+        r"C:\Program Files (x86)\Nmap\nmap.exe",
+        r"C:\Program Files\Nmap\nmap.exe",
+    ):
+        if os.path.exists(path):
+            return path
+    return None
+
+
 def _nmap_single_ip(nmap_path, ip, target_mac):
     try:
         result = subprocess.run(
@@ -576,7 +590,7 @@ def _find_ip_with_nmap_full_subnet_single_ip(target_mac, network, port=DEFAULT_P
     """
     if not NMAP_ARP_DISCOVERY_ENABLED:
         return None
-    nmap_path = shutil.which("nmap")
+    nmap_path = _find_nmap_exe()
     if not nmap_path:
         print("[nmap scan] nmap not found; skipping nmap rediscovery")
         return None
