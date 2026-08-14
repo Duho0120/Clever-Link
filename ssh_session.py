@@ -13,6 +13,7 @@ import hashlib
 import os
 import re
 import socket
+import threading
 import time
 
 import paramiko
@@ -61,6 +62,8 @@ NEW_IP_CONNECT_RETRY_MAX_DELAY_SECONDS = 4
 # app_ui.py가 시작할 때 set_confirm_callback(ask_confirm)으로 등록해둔다.
 # 등록 안 되어 있으면(터미널에서 직접 스크립트 테스트할 때 등) input()으로 대체한다.
 _confirm_callback = None
+_profile_connect_generations = {}
+_profile_connect_generations_guard = threading.Lock()
 
 
 def set_confirm_callback(func):
@@ -360,7 +363,7 @@ def _rediscover_new_ip(profile_name, profile, resolved_host, resolved_port):
         ip_rediscovery_state.clear_in_progress(profile_name)
 
 
-def connect_profile(profile_name, _mac_retry=False):
+def _connect_profile_inner(profile_name, _mac_retry=False, _connect_generation=None):
     """
     프로파일 이름으로 SSH 연결을 맺고, paramiko.SSHClient를 반환한다.
     비밀번호/키 파일 인증을 자동 분기하고, keepalive를 설정한다.
@@ -434,6 +437,7 @@ def connect_profile(profile_name, _mac_retry=False):
             scan_executor.shutdown(wait=False)
             if not new_ip:
                 raise
+            _raise_if_stale_connect_attempt(profile_name, _connect_generation)
             activity_log.log(profile_name, f"[동적 IP 재탐색] 새 IP({new_ip})로 프로파일 갱신 후 재접속")
             profile_store.update_profile_field(profile_name, host=new_ip)
             # ⚠ 초록 배너("재연결 성공") — 실제로 새 IP로 재접속까지 성공해야 의미가
@@ -448,6 +452,7 @@ def connect_profile(profile_name, _mac_retry=False):
             # 정확히 찾았는데도 접속 시도가 타임아웃나서 그대로 실패해버렸다(재시도가
             # 하나도 없었음). 짧게 대기 후 한 번 더 시도해서 이 타이밍 문제를 흡수한다.
             for attempt in range(NEW_IP_CONNECT_RETRY_COUNT):
+                _raise_if_stale_connect_attempt(profile_name, _connect_generation)
                 try:
                     client = _connect(connect_kwargs)
                     break
@@ -464,6 +469,11 @@ def connect_profile(profile_name, _mac_retry=False):
                           f"준비 안 됐을 수 있어 {delay}초 후 재시도 중 "
                           f"({attempt + 2}/{NEW_IP_CONNECT_RETRY_COUNT})...")
                     time.sleep(delay)
+            try:
+                _raise_if_stale_connect_attempt(profile_name, _connect_generation)
+            except StaleConnectAttempt:
+                client.close()
+                raise
             ip_rediscovery_state.mark_resolved(profile_name, old_ip_for_banner, new_ip)
             # ⚠ 여기까지 예외 없이 왔으면 새 IP로 재접속까지 성공한 것. 시트에서 온
             # 프로파일이면(source="sheet") 방금 우리가 로컬에서 바꾼 host가 시트의 마지막
@@ -472,6 +482,12 @@ def connect_profile(profile_name, _mac_retry=False):
             # 새로고침 때 이 로컬 교정이 되돌려질 수 있다는 걸 알려주기 위함.
             if profile.get("source") == "sheet":
                 sheet_diverged_state.mark(profile_name, profile["host"], new_ip)
+
+    try:
+        _raise_if_stale_connect_attempt(profile_name, _connect_generation)
+    except StaleConnectAttempt:
+        client.close()
+        raise
 
     # ⚠ 여기까지 왔으면 접속에 성공한 것 — 예전에 이 프로파일이 mDNS 후보 여러 개
     # 문제로 배너에 떠 있었더라도 지금은 해소된 것이므로 자동으로 지운다.
@@ -533,12 +549,18 @@ def connect_profile(profile_name, _mac_retry=False):
                     correct_ip = mac_discovery.find_ip_for_mac(
                         stored_mac, resolved_host, resolved_port, known_ips=profile.get("recent_ips"))
                     if correct_ip and correct_ip != resolved_host:
+                        _raise_if_stale_connect_attempt(profile_name, _connect_generation)
                         activity_log.log(profile_name, f"[MAC 불일치 자동 복구] 올바른 장비를 {correct_ip}에서 찾음 - 재접속 시도")
                         client.close()
                         profile_store.update_profile_field(profile_name, host=correct_ip)
                         # ⚠ 재귀 호출이 실제로 성공해야 의미가 있으므로, 그게 예외 없이
                         # 끝난 뒤에만 초록 배너를 기록한다.
-                        result = connect_profile(profile_name, _mac_retry=True)
+                        result = _connect_profile_inner(
+                            profile_name,
+                            _mac_retry=True,
+                            _connect_generation=_connect_generation,
+                        )
+                        _raise_if_stale_connect_attempt(profile_name, _connect_generation)
                         ip_rediscovery_state.mark_resolved(profile_name, resolved_host, correct_ip)
                         return result
                     activity_log.log(profile_name, "[MAC 불일치 자동 복구 실패] 로컬 대역에서 진짜 장비를 못 찾음 - 접속 차단")
@@ -584,6 +606,47 @@ def connect_profile(profile_name, _mac_retry=False):
             print(f"[호스트 이름 저장] '{profile_name}' -> {remote_hostname}")
 
     return client
+
+
+class StaleConnectAttempt(RuntimeError):
+    pass
+
+
+def _next_profile_connect_generation(profile_name):
+    with _profile_connect_generations_guard:
+        generation = _profile_connect_generations.get(profile_name, 0) + 1
+        _profile_connect_generations[profile_name] = generation
+        return generation
+
+
+def cancel_profile_connect(profile_name):
+    if not profile_name:
+        return
+    _next_profile_connect_generation(profile_name)
+
+
+def _is_current_connect_attempt(profile_name, generation):
+    if generation is None:
+        return True
+    with _profile_connect_generations_guard:
+        return _profile_connect_generations.get(profile_name) == generation
+
+
+def _raise_if_stale_connect_attempt(profile_name, generation):
+    if not _is_current_connect_attempt(profile_name, generation):
+        raise StaleConnectAttempt(f"[재접속] '{profile_name}' 이전 접속 시도는 새 요청으로 대체되어 중단합니다.")
+
+
+def connect_profile(profile_name, _mac_retry=False):
+    generation = _next_profile_connect_generation(profile_name)
+    try:
+        return _connect_profile_inner(
+            profile_name,
+            _mac_retry=_mac_retry,
+            _connect_generation=generation,
+        )
+    except StaleConnectAttempt:
+        raise
 
 
 def run_command(client, command):

@@ -127,6 +127,8 @@ async def handle_client(websocket):
                 # ⚠ 창 크기 동기화 — 없으면 vim/htop 화면이 깨짐
                 channel.resize_pty(width=msg["cols"], height=msg["rows"])
 
+    except ssh_session.StaleConnectAttempt as e:
+        print(str(e))
     except Exception as e:
         print(f"[터미널 오류] {e}")
         try:

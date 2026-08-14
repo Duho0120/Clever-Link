@@ -222,6 +222,23 @@ function cancelAutoRetry() {
     }
 }
 
+function notifyTerminalClosing() {
+    cancelAutoRetry();
+    _wsGeneration += 1;
+    if (ws) {
+        ws.onmessage = null;
+        ws.onerror = null;
+        ws.onclose = null;
+        try { ws.close(); } catch (e) {}
+        ws = null;
+    }
+    try {
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.cancel_profile_connect) {
+            window.pywebview.api.cancel_profile_connect();
+        }
+    } catch (e) {}
+}
+
 // 연결이 실제로 살아난 게 확인되면(출력이 한 번이라도 오면) 재시도 카운터를 초기화한다.
 function onConnectionAlive() {
     cancelAutoRetry();
@@ -243,6 +260,9 @@ async function init() {
     document.title = `터미널 - ${profileName}`;
     initTerminal();
 }
+
+window.addEventListener('beforeunload', notifyTerminalClosing);
+window.addEventListener('pagehide', notifyTerminalClosing);
 
 window.addEventListener('pywebviewready', init);
 </script>

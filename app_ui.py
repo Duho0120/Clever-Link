@@ -132,6 +132,10 @@ class TerminalApi:
     def get_clipboard_text(self):
         return get_clipboard_text()
 
+    def cancel_profile_connect(self):
+        ssh_session.cancel_profile_connect(self.profile_name)
+        return {"ok": True}
+
 
 class Api:
     """JS에서 window.pywebview.api.함수명() 으로 호출되는 다리 역할."""
