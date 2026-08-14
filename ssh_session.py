@@ -54,7 +54,7 @@ QUICK_RETRY_CONNECT_TIMEOUT_SECONDS = 3  # 위 대기(1초) + 이 값(3초) = �
 # ⚠ 2026-08-11 실사용 중 발견: 스캔으로 새 IP를 정확히 찾아도, 방금 재부팅/재연결된
 # 장비는 네트워크는 떴지만 sshd는 아직 준비 안 됐을 수 있다. 이 타이밍에 걸려 접속이
 # 실패하는 걸 흡수하기 위한 재시도 설정.
-NEW_IP_CONNECT_RETRY_COUNT = 5  # 총 시도 횟수 (최초 1회 + 재시도 4회)
+NEW_IP_CONNECT_RETRY_COUNT = 3  # 총 시도 횟수 (최초 1회 + 재시도 2회)
 NEW_IP_CONNECT_RETRY_BASE_DELAY_SECONDS = 1
 NEW_IP_CONNECT_RETRY_MAX_DELAY_SECONDS = 4
 
