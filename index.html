@@ -5,7 +5,7 @@
 <!-- 디자인 버전 전환: href만 style-v1.css <-> style-v2.css <-> style-v3.css <-> style-v4.css 로 바꾸면 됨.
      ⚠ ?v= 뒤 숫자는 WebView2 캐시 무력화용 — 전환할 때마다 숫자를 올려야
      예전 CSS가 캐시에서 그대로 다시 나오는 문제를 피할 수 있다. -->
-<link rel="stylesheet" href="style-v4.css?v=18" id="themeCss">
+<link rel="stylesheet" href="style-v4.css?v=19" id="themeCss">
 <!-- ⚠ 크기조절 핸들 스타일은 v1~v4 테마 전환과 무관하게 항상 있어야 하므로 외부 css가 아니라 여기 인라인으로 둠 -->
 <style>
 .resize-handle { position: fixed; z-index: 99999; }
@@ -670,7 +670,12 @@ async function loadProfiles() {
         row.innerHTML = `
             <div class="row-icon">${ICONS.server}</div>
             <div class="row-main">
-                <div class="row-title-line"><span class="profile-name">${name}</span></div>
+                <div class="row-title-line">
+                    <span class="profile-name">${name}</span>
+                    <span class="dip-badge off" id="dipbadge_${name}" title="확인 중...">
+                        <span class="dip-dot"></span><span id="diptext_${name}">MAC</span>
+                    </span>
+                </div>
                 <div class="row-status-line">
                     <span class="mount-badge off" id="mountbadge_${name}">
                         <span class="mount-dot" id="dot_${name}"></span>
@@ -692,6 +697,26 @@ async function loadProfiles() {
         // 서버에 실제로 존재하는 볼륨 목록은 SSH 조회가 걸리므로 목록 렌더링을 막지 않고 뒤에서 채움
         loadVolumeOptions(name);
         updateMountStatus(name);
+        updateDynamicIpBadge(name);
+    }
+}
+
+// 6번 개선사항 — 원격지별 "동적 IP 대응"(MAC 확보) 여부를 목록에서 바로 보여준다.
+// mountbadge와 같은 패턴: 렌더링을 막지 않고 뒤에서 채운다.
+async function updateDynamicIpBadge(name) {
+    const badge = document.getElementById('dipbadge_' + name);
+    const text = document.getElementById('diptext_' + name);
+    if (!badge || !text) return;
+    const status = await window.pywebview.api.get_dynamic_ip_status(name);
+    if (!badge.isConnected) return;
+    if (status.has_mac) {
+        badge.className = 'dip-badge on';
+        badge.title = 'MAC 주소가 확보되어 있습니다 — IP가 바뀌어도 자동으로 재탐색됩니다.';
+        text.textContent = 'MAC 확보';
+    } else {
+        badge.className = 'dip-badge off';
+        badge.title = '아직 MAC 주소가 확보되지 않았습니다 — 한 번 접속에 성공하면 자동으로 채워집니다.';
+        text.textContent = 'MAC 미확보';
     }
 }
 

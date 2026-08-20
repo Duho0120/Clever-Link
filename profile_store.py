@@ -259,6 +259,18 @@ def list_profile_names():
     return list(load_profiles().keys())
 
 
+def get_dynamic_ip_status(name):
+    """
+    원격지 목록 화면의 "동적 IP 대응" 배지용 — MAC/호스트 이름 확보 여부만 가볍게 반환.
+    get_profile()과 달리 keyring을 안 건드려서, 목록 렌더링 시 원격지 개수만큼 반복
+    호출해도 비밀번호 저장소에 매번 접근하지 않는다.
+    """
+    p = load_profiles().get(name)
+    if not p:
+        return {"has_mac": False, "has_hostname": False}
+    return {"has_mac": bool(p.get("mac")), "has_hostname": bool(p.get("hostname"))}
+
+
 def list_sheet_profile_names():
     """
     Phase 4-5: source가 "sheet"인(구글 시트 동기화로 생성된) 프로파일 이름만 반환.

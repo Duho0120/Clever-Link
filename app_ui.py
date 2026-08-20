@@ -44,7 +44,7 @@ from resource_path import resource_path, app_dir
 # 겪은 문제, 2026-08-05). 그래서 "이번에 실행 중인 코드의 버전"과 "마지막으로 실행했을 때
 # 버전"을 비교해서, 다르면(=새 버전이 배포된 것) 그때만 캐시를 지운다 — 평소 재실행에는
 # 영향 없고, 새 버전 배포 직후 첫 실행 한 번만 느려진다(~10초).
-APP_BUILD_VERSION = "20"
+APP_BUILD_VERSION = "21"
 
 
 # ── 종료 확인 팝업 전용 스레드 ──────────────────────────────
@@ -216,6 +216,10 @@ class Api:
     def get_profiles_in_ward(self, ward):
         """Phase 4: 특정 Ward에 속한 원격지(프로파일) 이름 목록만 반환."""
         return profile_store.list_profiles_in_ward(ward)
+
+    def get_dynamic_ip_status(self, name):
+        """원격지 목록의 "동적 IP 대응" 배지용 — MAC/호스트 이름 확보 여부만 반환."""
+        return profile_store.get_dynamic_ip_status(name)
 
     def get_sheet_issue_count(self, ward):
         """

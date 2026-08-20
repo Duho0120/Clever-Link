@@ -8,9 +8,19 @@
   이 앱만으로는 원격 장비의 avahi를 켤 수 없다 - 그건 장비 쪽 설정 문제.
 """
 
+import ipaddress
+
 from zeroconf import AddressResolverIPv4, Zeroconf
 
 RESOLVE_TIMEOUT_MS = 3000
+
+# ⚠ 5번 개선사항(도커 대역 필터링, 2026-08-20) — 도커가 설치된 장비(예: 낙상감지가
+# 도커로 배포된 젯슨)는 mDNS 응답에 실제 이더넷 IP와 도커 기본 브리지 IP(보통
+# 172.17.0.1)가 같이 섞여 나올 수 있다. 넓은 사설 대역(172.16.0.0/12)으로 걸렀다간
+# 실제 병동 LAN 대역(172.16.x.x)과 겹쳐서 위험하므로(실측: 68개 프로파일 중 23개가
+# 그 대역을 실제로 씀), 도커가 실제로 쓰는 좁은 기본 브리지 대역만 걸러낸다
+# (같은 68개 중 이 좁은 대역과 겹치는 실제 원격지는 0개로 확인됨).
+DOCKER_DEFAULT_BRIDGE = ipaddress.ip_network("172.17.0.0/16")
 
 
 def resolve_mdns_hostname_all(hostname, timeout_ms=RESOLVE_TIMEOUT_MS):
@@ -40,11 +50,24 @@ def resolve_mdns_hostname_all(hostname, timeout_ms=RESOLVE_TIMEOUT_MS):
         found = resolver.request(zc, timeout_ms)
         if not found:
             return []
-        return resolver.parsed_addresses()
+        addresses = resolver.parsed_addresses()
     except Exception:
         return []
     finally:
         zc.close()
+
+    # ⚠ 후보가 2개 이상일 때만 도커 대역을 걸러낸다 — 후보가 원래 1개뿐이면 그게
+    # 도커 대역처럼 생겼어도 유일한 응답이니 그대로 신뢰한다(걸러내면 유일한 정답을
+    # 잃을 위험). 걸러내다 전부 사라지는 극단적인 경우엔 원래 목록을 그대로 유지한다.
+    if len(addresses) >= 2:
+        filtered = [ip for ip in addresses if ipaddress.ip_address(ip) not in DOCKER_DEFAULT_BRIDGE]
+        if filtered and len(filtered) != len(addresses):
+            excluded = [ip for ip in addresses if ip not in filtered]
+            print(f"[mDNS] 도커 기본 브리지 주소 제외: {excluded}")
+        if filtered:
+            addresses = filtered
+
+    return addresses
 
 
 def resolve_mdns_hostname(hostname, timeout_ms=RESOLVE_TIMEOUT_MS):
