@@ -284,37 +284,3 @@ def list_profiles_in_ward(ward):
     """특정 Ward에 속한 프로파일 이름 목록만 반환."""
     profiles = load_profiles()
     return [name for name, p in profiles.items() if p.get("ward") == ward]
-
-
-# ── 여기서부터 테스트 ──────────────────────────────────────
-if __name__ == "__main__":
-    print("=== 1-1 프로파일 저장소 테스트 ===\n")
-
-    # 1. 비밀번호 방식 프로파일 저장 (0-1에서 쓰신 우분투 계정 기준)
-    save_profile(
-        name="WSL테스트_비번",
-        host="127.0.0.1",
-        username="sky_1214",
-        auth_type="password",
-        secret="482659",
-    )
-
-    # 2. 키 파일 방식 프로파일 저장 (0-3에서 만드신 키 기준)
-    save_profile(
-        name="WSL테스트_키파일",
-        host="127.0.0.1",
-        username="sky_1214",
-        auth_type="key_file",
-        secret=r"C:\Users\ASUS\.ssh\id_ed25519_wsltest",
-    )
-
-    print("\n등록된 프로파일 목록:", list_profile_names())
-
-    # 3. 조회 테스트
-    print("\n--- '비번' 프로파일 조회 ---")
-    print(get_profile("WSL테스트_비번"))
-
-    print("\n--- '키파일' 프로파일 조회 ---")
-    print(get_profile("WSL테스트_키파일"))
-
-    print("\n=== 테스트 끝 ===")

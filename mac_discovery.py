@@ -27,6 +27,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 # (같은 장비가 첫 ping 255ms -> 두 번째부터 4ms). 대역 전체의 응답 시간을 실제로 재봤더니
 # 살아있는 47개 중 6개(13%)가 300~1000ms 구간이라 300ms 타임아웃에 통째로 잘려나가고 있었다.
 # 사용자가 PowerShell에서 `-w 200`으로 훑었을 때 젯슨이 "빈 IP"로 보였던 것도 같은 이유.
+
 PING_TIMEOUT_MS = 1000
 TCP_PROBE_TIMEOUT_S = 1.0
 DEFAULT_PROBE_PORT = 22  # 대상 포트를 모를 때(예: 호출부가 안 넘겨줄 때)의 기본값

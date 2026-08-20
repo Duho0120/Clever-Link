@@ -305,32 +305,4 @@ def sync_from_sheet():
 
     return added, updated
 
-
-# ── 여기서부터 로컬 테스트 (실제 구글 시트 없이 파싱 로직만 검증) ──────────────
-if __name__ == "__main__":
-    import os
-
-    # ⚠ 병합 셀이 CSV로 내보내질 때 실제 줄바꿈이 들어갈 수 있는데, 이 경우 CSV 표준은
-    # 그 셀 전체를 큰따옴표로 감싸서 표현한다 (csv.writer가 알아서 처리해줌). 손으로
-    # 문자열을 짜면 이 부분을 놓치기 쉬워서, csv 모듈로 직접 만든다.
-    sample_rows = [
-        ["기기명", "Ward", "Room", "Host name", "IP", "ID", "PW"],
-        ["Jetson Orin Nano", "S서울\n(3)", "3021", "co6", "192.168.123.3", "beclever", "959811!!"],
-        ["Jetson Orin Nano", "", "3022", "co32", "192.168.123.5", "beclever", ""],  # PW 빈칸 -> 기본값
-        ["Jetson Orin Nano", "", "3161", "co9", "loclx.io:12233", "beclever", ""],  # 포트 분리
-        ["Jetson Orin Nano", "", "3162\n3163", "co10", "192.168.123.2", "beclever", ""],  # Room 여러 개 -> 원격지 1개("3162,3163-co10")로 합쳐짐
-        ["Jetson Orin Nano", "", "3164", "co11", "192.168.20.201\n(us.loclx.io:12224)", "beclever", ""],  # 로컬+터널
-        ["Jetson Orin Nano", "포항세명기독병원\n(62)", "", "co99", "", "", ""],  # Room/IP 없음 -> 집계만 되고 건너뜀
-    ]
-
-    tmp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_sheet_sync_test.csv")
-    with open(tmp_path, "w", encoding="utf-8", newline="") as f:
-        csv.writer(f).writerows(sample_rows)
-
-    SHEET_CSV_URL = "file:///" + tmp_path.replace("\\", "/")
-    rows = fetch_sheet_rows()
-    for r in rows:
-        print(r)
-    print("issue counts:", _last_issue_counts)
-
     os.remove(tmp_path)

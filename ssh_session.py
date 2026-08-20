@@ -793,34 +793,3 @@ def open_terminal_channel(client):
     # 기본 terminfo라 더 안전하다.
     channel = client.invoke_shell(term="xterm")
     return channel
-
-
-# ── 여기서부터 테스트 ──────────────────────────────────────
-if __name__ == "__main__":
-    print("=== 1-3 SSH 세션 모듈 테스트 ===\n")
-
-    PROFILE = "WSL테스트_비번"
-
-    print(f"'{PROFILE}' 프로파일로 접속 시도...")
-    client = connect_profile(PROFILE)
-    print("[접속 성공]\n")
-
-    # 1. exec_command 테스트
-    result = run_command(client, "whoami")
-    print(f"exec_command 결과: {result.strip()}")
-
-    # 2. invoke_shell (대화형 터미널) 테스트
-    print("\n대화형 셸(invoke_shell) 테스트...")
-    channel = open_terminal_channel(client)
-    channel.send("echo hello_from_shell\n")
-
-    import time
-    time.sleep(1)  # 서버 응답 기다리기
-    output = channel.recv(4096).decode()
-    print(f"셸 출력:\n{output}")
-
-    channel.close()
-    client.close()
-    print("\n=== 테스트 끝 ===")
-    print(f"\n참고: {KNOWN_HOSTS_FILE} 파일이 생성되었는지 확인해보세요.")
-    print("다시 이 스크립트를 실행하면, 이번엔 지문 승인 질문 없이 바로 접속됩니다.")

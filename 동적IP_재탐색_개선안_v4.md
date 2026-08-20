@@ -202,7 +202,7 @@ TCP timeout / no route / connection refused:
 
 ```text
 1. 새 IP 후보로 SSH 접속을 시도한다.
-2. 기존처럼 새 IP에 대해 5회 재시도한다.
+2. 기존처럼 새 IP에 대해 3회 재시도한다. (2026-08-18 기준, 원래 5회에서 축소됨)
 3. 최종 실패한 IP를 프로파일별 failed candidate로 기록한다.
 4. 다음 탐색에서 같은 MAC 후보가 여러 개면 failed candidate를 뒤로 미룬다.
 5. 후보가 failed candidate 하나뿐이면 바로 버리지는 않는다.

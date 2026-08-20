@@ -598,23 +598,3 @@ def stop_rcd():
         _rc_call("core/quit")
     except RuntimeError:
         pass  # quit 호출 도중 연결이 끊기며 에러처럼 보일 수 있음 — 정상 동작
-
-
-# ── 여기서부터 테스트 ──────────────────────────────────────
-if __name__ == "__main__":
-    print("=== 1-2 마운트 제어 모듈 테스트 ===\n")
-
-    DRIVE = "T:"  # 0-2에서 쓴 S:와 겹치지 않게 새 문자 사용
-    PROFILE = "WSL테스트_비번"  # 1-1에서 저장한 프로파일 이름
-
-    # 시작 전 혹시 남은 유령 마운트 정리
-    cleanup_all()
-
-    # 마운트 실행 + 자동 검증
-    mount_profile(PROFILE, DRIVE)
-
-    print(f"\n탐색기(또는 관리자 권한 PowerShell)에서 {DRIVE} 드라이브를 확인해보세요.")
-    input("확인했으면 Enter를 눌러 해제합니다...")
-
-    unmount(DRIVE)
-    print("\n=== 테스트 끝 ===")
