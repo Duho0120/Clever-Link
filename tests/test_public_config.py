@@ -4,11 +4,10 @@ import json
 import os
 from pathlib import Path
 import tempfile
-import types
 import unittest
 from unittest.mock import patch
 
-import app_config
+from clever_link import config as app_config
 
 
 class PublicConfigTests(unittest.TestCase):
@@ -42,15 +41,14 @@ class PublicConfigTests(unittest.TestCase):
                 self.settings()
 
     def test_sheet_without_url_does_not_call_network(self):
-        with patch.dict("sys.modules", {"profile_store": types.ModuleType("profile_store")}):
-            sheet = importlib.import_module("sheet_sync")
+        sheet = importlib.import_module("clever_link.sheets.sheet_sync")
         with patch.object(sheet, "SHEET_CSV_URL", ""), patch.object(sheet.urllib.request, "urlopen") as request:
             with self.assertRaisesRegex(ValueError, "config.json"):
                 sheet.fetch_sheet_rows()
             request.assert_not_called()
 
     def test_all_python_sources_parse(self):
-        for file in Path(__file__).parent.glob("*.py"):
+        for file in (Path(__file__).resolve().parents[1] / "clever_link").rglob("*.py"):
             ast.parse(file.read_text(encoding="utf-8-sig"), filename=str(file))
 
 

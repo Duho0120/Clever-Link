@@ -18,19 +18,18 @@ import time
 import json
 import requests
 
-import profile_store
-from profile_store import get_profile
-from resource_path import resource_path
-from host_resolver import resolve_reachable_address, is_reachable
-import mac_discovery
-import mdns_discovery
-import mdns_ambiguity_state
-import mac_mismatch_state
-import sheet_diverged_state
-import mac_resolved_state
-import ssh_session
-import ip_rediscovery_state
-
+from clever_link import profiles as profile_store
+from clever_link.profiles import get_profile
+from clever_link.platform.resource_path import resource_path, app_dir
+from clever_link.connection.host_resolver import resolve_reachable_address, is_reachable
+from clever_link.discovery import mac_discovery as mac_discovery
+from clever_link.discovery import mdns_discovery as mdns_discovery
+from clever_link.state import mdns_ambiguity_state as mdns_ambiguity_state
+from clever_link.state import mac_mismatch_state as mac_mismatch_state
+from clever_link.state import sheet_diverged_state as sheet_diverged_state
+from clever_link.state import mac_resolved_state as mac_resolved_state
+from clever_link.connection import ssh_session as ssh_session
+from clever_link.state import ip_rediscovery_state as ip_rediscovery_state
 # ⚠ 2026-08-11 실사용 중 발견(ssh_session.py와 동일한 이유) — "안 닿음"의 대부분은 IP가
 # 실제로 바뀐 게 아니라 순간적인 네트워크 끊김이다. 전체 MAC 스캔으로 넘어가기 전에
 # 짧게 대기했다가 같은 주소로 한 번 더 확인해서, 흔한 케이스에서 불필요한 스캔을 피한다.
@@ -47,7 +46,7 @@ RC_BASE_URL = f"http://{RC_ADDR}"
 
 _rcd_process = None  # 우리가 띄운 rcd 프로세스를 기억해두는 곳
 
-MOUNT_STATE_FILE = "mount_state.json"
+MOUNT_STATE_FILE = os.path.join(app_dir(), "mount_state.json")
 # ⚠ find_current_drive_for_profile을 rclone의 mount/listmounts "Fs" 문자열 비교로 구현했었으나,
 # 실제로는 rclone이 즉석 원격(connection string)을 ":sftp{ZcLhz}:" 같은 내부 해시로만 보여줘서
 # host=/user= 문자열이 그 안에 전혀 없었음 -> 항상 None을 반환하는 버그였음 (F-2 검증 중 발견).

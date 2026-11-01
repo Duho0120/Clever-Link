@@ -16,7 +16,9 @@ import winreg
 # 모든 WebView2 Runtime 채널이 공유하는 고정 GUID (마이크로소프트 공식 문서 기준)
 _CLIENT_GUID = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
-WEBVIEW2_CHECKED_FLAG = "webview2_checked.flag"
+from clever_link.platform.resource_path import app_dir
+
+WEBVIEW2_CHECKED_FLAG = os.path.join(app_dir(), "webview2_checked.flag")
 
 
 def _pv_from_key(hive, subkey):

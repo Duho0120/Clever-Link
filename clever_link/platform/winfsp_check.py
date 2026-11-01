@@ -13,7 +13,9 @@ import subprocess
 # ⚠ 사용자 피드백: 파일 존재 확인 자체는 순식간이지만, 어차피 한 번 확인되면
 # 다시 물어볼 필요가 없으므로 확인 완료 표시를 로컬에 남겨서 다음 실행부터는
 # 아예 건너뛰도록 함 (설치를 거부한 경우엔 표시하지 않아 다음 실행에도 다시 물어봄).
-WINFSP_CHECKED_FLAG = "winfsp_checked.flag"
+from clever_link.platform.resource_path import app_dir
+
+WINFSP_CHECKED_FLAG = os.path.join(app_dir(), "winfsp_checked.flag")
 
 
 def is_winfsp_installed():

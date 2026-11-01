@@ -76,19 +76,44 @@ flowchart TD
 
 현장 소요 시간은 출장 동행 시 관찰 기준이고, 앱 복구 시간은 개발 테스트 기준입니다. 동일 조건의 전후 비교나 평균값은 아니며, 1분 이상 걸리거나 복구하지 못한 사례도 있어 항상 일정 시간 이내 복구를 보장하지 않습니다.
 
+## 폴더 구조
+
+```text
+Clever-Link/
+├─ run.py                     # 실행 진입점
+├─ config.example.json        # 비공개 설정의 예시
+├─ requirements.txt
+├─ clever_link/
+│  ├─ app.py                  # 화면·Python API 연결
+│  ├─ config.py / profiles.py # 설정·프로파일·keyring
+│  ├─ connection/             # SSH·SFTP·터미널 서버
+│  ├─ discovery/              # MAC·mDNS 탐색
+│  ├─ sheets/                 # 시트 전처리·동기화
+│  ├─ state/                  # 배너·연결 상태
+│  ├─ platform/               # Windows 환경·트레이·경로
+│  └─ ui/                     # HTML·CSS·이미지·외부 JS
+├─ docs/                      # 개발·설계·배포 문서와 이미지
+├─ tests/                     # 설정·import·리소스 경로 테스트
+└─ packaging/clever_link.spec # PyInstaller 설정
+```
+
+루트의 `run.py`로 실행합니다. 다른 작업 폴더에서는 해당 파일의 절대 경로를 지정할 수 있습니다. 설정·프로파일·상태 파일은 현재 작업 폴더가 아닌 저장소 루트(배포판은 exe 옆)를 기준으로 읽고 씁니다. `CLEVER_LINK_DATA_DIR`로 별도 데이터 폴더를 지정할 경우, 먼저 존재하는 폴더를 준비하세요. UI 리소스는 데이터 폴더와 분리하여 찾습니다.
+
+`rclone.exe`는 저장소 루트에 둡니다. 빌드는 루트에서 `pyinstaller packaging/clever_link.spec`로 실행합니다. 개발 문서의 이전 파일명·빌드 명령은 당시 이력을 설명하는 것이며, 현재 실행 방법은 이 README를 기준으로 합니다.
+
 ## 주요 코드
 
 | 파일 | 역할 |
 | --- | --- |
-| [app_ui.py](app_ui.py), [index.html](index.html) | 앱 화면과 Python–JavaScript 연동 |
-| [sheet_sync.py](sheet_sync.py) | 시트 파싱·전처리·프로파일 동기화 |
-| [profile_store.py](profile_store.py) | 프로파일과 keyring 인증정보 관리 |
-| [mount_control.py](mount_control.py) | SFTP 드라이브 마운트 |
-| [ssh_session.py](ssh_session.py) | SSH 연결·재시도·MAC 검증 |
-| [mac_discovery.py](mac_discovery.py) | ARP 캐시·Nmap 기반 MAC 탐색 |
-| [mdns_discovery.py](mdns_discovery.py) | 호스트명 기반 보조 조회 |
-| [terminal_server.py](terminal_server.py), [terminal.html](terminal.html) | WebSocket 기반 터미널 입출력 |
-| [app_config.py](app_config.py) | 공개 코드와 분리한 로컬 설정 로딩 |
+| [app.py](clever_link/app.py), [index.html](clever_link/ui/index.html) | 앱 화면과 Python–JavaScript 연동 |
+| [sheet_sync.py](clever_link/sheets/sheet_sync.py) | 시트 파싱·전처리·프로파일 동기화 |
+| [profiles.py](clever_link/profiles.py) | 프로파일과 keyring 인증정보 관리 |
+| [mount_control.py](clever_link/connection/mount_control.py) | SFTP 드라이브 마운트 |
+| [ssh_session.py](clever_link/connection/ssh_session.py) | SSH 연결·재시도·MAC 검증 |
+| [mac_discovery.py](clever_link/discovery/mac_discovery.py) | ARP 캐시·Nmap 기반 MAC 탐색 |
+| [mdns_discovery.py](clever_link/discovery/mdns_discovery.py) | 호스트명 기반 보조 조회 |
+| [terminal_server.py](clever_link/connection/terminal_server.py), [terminal.html](clever_link/ui/terminal.html) | WebSocket 기반 터미널 입출력 |
+| [config.py](clever_link/config.py) | 공개 코드와 분리한 로컬 설정 로딩 |
 
 ## 공개 범위
 
@@ -99,7 +124,7 @@ flowchart TD
 1. Python 환경에 `requirements.txt`의 패키지를 설치합니다.
 2. Windows에 WebView2 Runtime, WinFsp, Nmap/Npcap을 설치합니다. ARP 탐색에는 로컬 네트워크 접근과 적절한 실행 권한이 필요합니다.
 3. 공식 배포처의 `rclone.exe`를 앱 폴더에 준비합니다. 외부 바이너리는 이 저장소에 포함하지 않습니다.
-4. `python app_ui.py`로 실행합니다. 시트 설정 없이도 장비를 수동 등록할 수 있습니다.
+4. `python run.py`로 실행합니다. 시트 설정 없이도 장비를 수동 등록할 수 있습니다.
 
 ## 선택 사항: 시트 연동
 
@@ -116,7 +141,7 @@ flowchart TD
 `requirements.txt`는 코드의 직접 의존성을 정리한 것이며, 특정 버전 조합의 재현 환경은 아닙니다. 빌드에는 별도로 PyInstaller가 필요합니다. 기본 spec은 rclone을 포함하며 OpenSSL DLL을 수동 지정해야 하는 환경에서는 `CLEVER_LINK_OPENSSL_DIR`을 설정할 수 있습니다.
 
 ```powershell
-python -B -m unittest test_public_config -v
+python -B -m unittest discover -s tests -v
 ```
 
 공개용 설정 로딩, 환경변수 우선순위, 잘못된 설정 처리, URL 미설정 시 네트워크 요청 방지와 Python 소스 구문을 검사합니다. 이 테스트가 전체 UI·실제 Jetson 연결·배포 빌드 검증을 대신하지는 않습니다.

@@ -2,7 +2,8 @@
 import os
 from pathlib import Path
 
-extra_binaries = [('rclone.exe', '.')]
+ROOT = Path(SPECPATH).resolve().parent
+extra_binaries = [(str(ROOT / 'rclone.exe'), '.')]
 openssl_dir = os.environ.get('CLEVER_LINK_OPENSSL_DIR')
 if openssl_dir:
     for name in ('libcrypto-3-x64.dll', 'libssl-3-x64.dll'):
@@ -13,8 +14,8 @@ if openssl_dir:
 
 
 a = Analysis(
-    ['app_ui.py'],
-    pathex=[],
+    [str(ROOT / 'run.py')],
+    pathex=[str(ROOT)],
     # ⚠ 이 컴퓨터엔 conda 환경마다 서로 다른 버전의 libcrypto/libssl DLL이 깔려 있는데,
     # PyQt5를 제외(excludes)했더니 PyInstaller가 자동으로 엉뚱한(다른 conda 환경) 버전을
     # 주워담아서 cryptography(paramiko가 SSH에 사용)가 로드되자마자 Rust 패닉으로 죽는
@@ -25,7 +26,7 @@ a = Analysis(
     # style-v4.css만 참조하고, v4는 헤더 텍스트를 이미지가 아니라 Georgia 폰트로 씀).
     # 소스 폴더엔 그대로 남겨서 나중에 dev 중 버전 토글용으로 계속 쓸 수 있게 하되,
     # 배포용 datas에서만 뺀다.
-    datas=[('index.html', '.'), ('terminal.html', '.'), ('xterm.min.js', '.'), ('xterm.min.css', '.'), ('addon-fit.min.js', '.'), ('style-v4.css', '.'), ('logo.png', '.')],
+    datas=[(str(ROOT / 'clever_link' / 'ui'), 'clever_link/ui')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -70,7 +71,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='appicon.ico',
+    icon=str(ROOT / 'clever_link' / 'ui' / 'images' / 'appicon.ico'),
 )
 
 coll = COLLECT(

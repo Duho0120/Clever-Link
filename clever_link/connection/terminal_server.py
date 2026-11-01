@@ -21,8 +21,7 @@ import threading
 
 import websockets
 
-import ssh_session
-
+from clever_link.connection import ssh_session as ssh_session
 WS_HOST = "localhost"
 WS_PORT = 8765
 

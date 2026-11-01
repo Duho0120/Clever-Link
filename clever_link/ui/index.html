@@ -5,7 +5,7 @@
 <!-- 디자인 버전 전환: href만 style-v1.css <-> style-v2.css <-> style-v3.css <-> style-v4.css 로 바꾸면 됨.
      ⚠ ?v= 뒤 숫자는 WebView2 캐시 무력화용 — 전환할 때마다 숫자를 올려야
      예전 CSS가 캐시에서 그대로 다시 나오는 문제를 피할 수 있다. -->
-<link rel="stylesheet" href="style-v4.css?v=19" id="themeCss">
+<link rel="stylesheet" href="css/style-v4.css?v=19" id="themeCss">
 <!-- ⚠ 크기조절 핸들 스타일은 v1~v4 테마 전환과 무관하게 항상 있어야 하므로 외부 css가 아니라 여기 인라인으로 둠 -->
 <style>
 .resize-handle { position: fixed; z-index: 99999; }
@@ -28,10 +28,10 @@
   <!-- ⚠ 프레임리스 창: OS 타이틀바가 없어서 이 영역이 드래그 이동 담당 (id="titlebarDrag", initWindowControls()에서 리스너 연결) -->
   <div class="header-row-inner" id="titlebarDrag">
     <div class="header-title">
-      <span class="header-logo"><img src="logo.png?v=3" alt="CLEVER Link"></span>
+      <span class="header-logo"><img src="images/logo.png?v=3" alt="CLEVER Link"></span>
       <div class="header-title-text">
         <h2>CLEVER Link</h2>
-        <img class="header-wordmark" src="wordmark.png?v=1" alt="Clever Link">
+        <img class="header-wordmark" src="images/logo.png?v=1" alt="Clever Link">
         <span class="header-subtitle">Mount Program</span>
       </div>
     </div>

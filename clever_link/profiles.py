@@ -9,7 +9,9 @@ import json
 import os
 import keyring
 
-PROFILE_FILE = "profiles.json"
+from clever_link.platform.resource_path import app_dir
+
+PROFILE_FILE = os.path.join(app_dir(), "profiles.json")
 KEYRING_SERVICE = "sftp_ssh_launcher"  # keyring에서 우리 앱을 식별하는 이름
 MAX_RECENT_IPS = 3  # 5번 개선사항 — 프로파일별로 기억해둘 최근 성공 IP 개수
 

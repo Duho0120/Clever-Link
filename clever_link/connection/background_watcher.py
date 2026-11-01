@@ -15,14 +15,14 @@
 import threading
 import time
 
-import profile_store
-import mac_discovery
-import mdns_discovery
-import mdns_ambiguity_state
-import mac_mismatch_state
-import mac_resolved_state
-import ip_rediscovery_state
-from host_resolver import resolve_reachable_address, is_reachable
+from clever_link import profiles as profile_store
+from clever_link.discovery import mac_discovery as mac_discovery
+from clever_link.discovery import mdns_discovery as mdns_discovery
+from clever_link.state import mdns_ambiguity_state as mdns_ambiguity_state
+from clever_link.state import mac_mismatch_state as mac_mismatch_state
+from clever_link.state import mac_resolved_state as mac_resolved_state
+from clever_link.state import ip_rediscovery_state as ip_rediscovery_state
+from clever_link.connection.host_resolver import resolve_reachable_address, is_reachable
 
 DEFAULT_INTERVAL_SECONDS = 600  # 10분
 # ⚠ 2026-08-11 실사용 중 발견(ssh_session.py/mount_control.py와 동일한 이유) — "안 닿음"의

@@ -39,13 +39,12 @@ import csv
 import io
 import urllib.request
 
-import profile_store
-import sheet_diverged_state
-
+from clever_link import profiles as profile_store
+from clever_link.state import sheet_diverged_state as sheet_diverged_state
 # ⚠ "edit?usp=sharing" 같은 일반 공유 링크는 CSV가 아니라 사람이 보는 화면(HTML)이 내려와서
 # 안 된다. "링크 있는 사람에게 공개" 상태의 시트라면 "/export?format=csv"를 붙이면 별도
 # 게시(웹에 게시) 절차 없이도 바로 CSV로 받을 수 있다 (직접 확인함).
-from app_config import SHEET_CSV_URL, DEFAULT_PASSWORD
+from clever_link.config import SHEET_CSV_URL, DEFAULT_PASSWORD
 
 # 시트의 PW 칸이 비어있는 행 대부분이 이 비밀번호를 공유하는 것으로 확인됨 (2026-07-21).
 # Optional fallback password is configured locally, never committed.

@@ -3,9 +3,9 @@
 import json
 import os
 from pathlib import Path
-import sys
+from clever_link.platform.resource_path import app_dir
 
-BASE_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+BASE_DIR = Path(app_dir())
 CONFIG_PATH = BASE_DIR / "config.json"
 
 

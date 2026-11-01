@@ -18,23 +18,23 @@ from tkinter import messagebox
 import webview
 from webview.window import FixPoint
 
-import profile_store
-import mount_control
-import terminal_server
-import winfsp_check
-import webview2_check
-import nmap_check
-import ssh_session
-import mdns_ambiguity_state
-import mac_mismatch_state
-import mac_resolved_state
-import ip_rediscovery_state
-import activity_log
-import sheet_diverged_state
-import sheet_sync
-import tray_icon
-import background_watcher
-from resource_path import resource_path, app_dir
+from clever_link import profiles as profile_store
+from clever_link.connection import mount_control as mount_control
+from clever_link.connection import terminal_server as terminal_server
+from clever_link.platform import winfsp_check as winfsp_check
+from clever_link.platform import webview2_check as webview2_check
+from clever_link.platform import nmap_check as nmap_check
+from clever_link.connection import ssh_session as ssh_session
+from clever_link.state import mdns_ambiguity_state as mdns_ambiguity_state
+from clever_link.state import mac_mismatch_state as mac_mismatch_state
+from clever_link.state import mac_resolved_state as mac_resolved_state
+from clever_link.state import ip_rediscovery_state as ip_rediscovery_state
+from clever_link.state import activity_log as activity_log
+from clever_link.state import sheet_diverged_state as sheet_diverged_state
+from clever_link.sheets import sheet_sync as sheet_sync
+from clever_link.platform import tray_icon as tray_icon
+from clever_link.connection import background_watcher as background_watcher
+from clever_link.platform.resource_path import resource_path, app_dir
 
 # ⚠ 배포 후 WebView2 캐시 문제 방지용 — 새 버전을 배포할 때마다 이 숫자를 1씩 올려야 한다.
 # WebView2는 storage_path(아래 webview_data)를 고정 폴더로 재사용하는데(재시작마다 새로
@@ -529,7 +529,7 @@ class Api:
         어떤 원격지에 연결할지는 이 창 전용 TerminalApi(js_api)를 통해 전달한다.
         """
         try:
-            terminal_path = resource_path("terminal.html")
+            terminal_path = resource_path("clever_link/ui/terminal.html")
             webview.create_window(
                 f"터미널 - {name}",
                 url=terminal_path,
@@ -544,7 +544,7 @@ class Api:
 
 
 
-if __name__ == "__main__":
+def main():
     terminal_server.start_server_background()
     mount_control.cleanup_all()  # 시작 시: 이전 실행에서 남은 유령 마운트 정리
 
@@ -573,7 +573,7 @@ if __name__ == "__main__":
     # Nmap 설치 확인 (v4 동적 IP 재탐색의 ARP discovery에 사용)
     nmap_check.ensure_nmap(ask_confirm)
 
-    INDEX_PATH = resource_path("index.html")
+    INDEX_PATH = resource_path("clever_link/ui/index.html")
 
     api = Api()
     window = webview.create_window(

@@ -18,19 +18,20 @@ import time
 
 import paramiko
 
-import profile_store
-from profile_store import get_profile
-from host_resolver import resolve_reachable_address
-import mac_discovery
-import mdns_discovery
-import mdns_ambiguity_state
-import mac_mismatch_state
-import mac_resolved_state
-import sheet_diverged_state
-import ip_rediscovery_state
-import activity_log
+from clever_link import profiles as profile_store
+from clever_link.profiles import get_profile
+from clever_link.connection.host_resolver import resolve_reachable_address
+from clever_link.discovery import mac_discovery as mac_discovery
+from clever_link.discovery import mdns_discovery as mdns_discovery
+from clever_link.state import mdns_ambiguity_state as mdns_ambiguity_state
+from clever_link.state import mac_mismatch_state as mac_mismatch_state
+from clever_link.state import mac_resolved_state as mac_resolved_state
+from clever_link.state import sheet_diverged_state as sheet_diverged_state
+from clever_link.state import ip_rediscovery_state as ip_rediscovery_state
+from clever_link.state import activity_log as activity_log
+from clever_link.platform.resource_path import app_dir
 
-KNOWN_HOSTS_FILE = "known_hosts_launcher"  # 우리 앱 전용 known_hosts 파일
+KNOWN_HOSTS_FILE = os.path.join(app_dir(), "known_hosts_launcher")
 # ⚠ 2026-08-11 실사용 중 발견 — 30초는 죽은 연결을 알아채기엔 너무 길었다(터미널
 # 재접속 버튼이 뜨는 데 오래 걸리는 원인 중 하나). terminal_server.py의 채널 상태
 # 확인 주기(10초)와 맞춰서 더 빨리 감지되도록 단축.

@@ -10,7 +10,9 @@ import os
 import shutil
 import subprocess
 
-NMAP_CHECKED_FLAG = "nmap_checked.flag"
+from clever_link.platform.resource_path import app_dir
+
+NMAP_CHECKED_FLAG = os.path.join(app_dir(), "nmap_checked.flag")
 
 
 def is_nmap_installed():

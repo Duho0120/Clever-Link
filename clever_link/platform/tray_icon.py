@@ -11,12 +11,12 @@ import threading
 from PIL import Image
 import pystray
 
-from resource_path import resource_path
+from clever_link.platform.resource_path import resource_path
 
 
 def _make_icon_image():
     """CLEVER Link 로고(logo.png, 원 바깥 투명 처리된 버전)를 트레이 아이콘으로 그대로 사용."""
-    return Image.open(resource_path("logo.png")).convert("RGBA")
+    return Image.open(resource_path("clever_link/ui/images/logo.png")).convert("RGBA")
 
 
 def start_tray(window, on_full_quit):

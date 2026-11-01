@@ -35,3 +35,4 @@ _internal/
 .venv/
 venv/
 .pytest_cache/
+webview_data_version.txt
