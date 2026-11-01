@@ -1,0 +1,8 @@
+pywebview
+paramiko
+keyring
+zeroconf
+requests
+pystray
+Pillow
+websockets

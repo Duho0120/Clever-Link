@@ -1,0 +1,37 @@
+# 런타임 상태 / 캐시
+__pycache__/
+*.pyc
+webview_data/
+webview_data_old2/
+mount_state.json
+known_hosts_launcher
+*.bak
+*.flag
+
+# 실제 배포 시설 정보 (병원명/병동/IP 등 민감 운영 데이터)
+profiles.json
+ward_test_mapping.json
+zz_check.json
+
+# 대용량 외부 바이너리 (재다운로드로 대체 가능)
+rclone.exe
+
+# Private settings, generated bundles and diagnostic output
+config.json
+.env
+.env.*
+!.env.example
+profiles*.json
+!profiles.example.json
+*.log
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+실행파일/
+dist/
+build/
+_internal/
+.venv/
+venv/
+.pytest_cache/
